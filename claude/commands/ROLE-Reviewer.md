@@ -2,9 +2,13 @@
 description: The reviewer checks your changes (or the last commit) and reports findings by severity
 argument-hint: [file, folder or commit range; empty = uncommitted changes]
 ---
-Usa el subagente `revisor` para revisar: $ARGUMENTS
+Use the `revisor` subagent to review: $ARGUMENTS
 
-Si arriba no indiqué nada, que revise los cambios sin commit (o el último commit si no hay cambios).
+If nothing was given above, have it review the uncommitted changes (or the last commit if
+there are none).
 
-Cuando termine, muéstrame su informe completo. Comprueba tú mismo en el código los hallazgos
-críticos y altos antes de proponerme arreglos, y pregúntame antes de cambiar algo.
+When it finishes, show me its full report. Check every critical and high finding in the code
+yourself before proposing a fix, and tell me if one turns out to be wrong. Ask me before
+changing anything.
+
+Talk to me in Spanish.

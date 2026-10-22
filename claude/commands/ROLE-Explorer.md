@@ -2,6 +2,12 @@
 description: The explorer explains how part of the project works, citing file and line
 argument-hint: <function, flow or file to explain>
 ---
-Usa el subagente `explorador` para explicarme cómo funciona: $ARGUMENTS
+Use the `explorador` subagent to explain how this works: $ARGUMENTS
 
-Muéstrame su explicación completa, con los enlaces a archivo y línea. No modifiques nada.
+If nothing was given above, ask me which part of the project I want explained.
+
+Show me its full explanation, with the file and line links. Do not modify anything. If its
+"be careful with" section points to a likely bug, say so in one line at the end and offer to
+look into it.
+
+Talk to me in Spanish.
