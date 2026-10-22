@@ -11,7 +11,7 @@ Todo, igual que en la Mac. `install-windows.ps1` copia los archivos tal cual, sa
 
 | Pieza | Destino |
 |---|---|
-| `claude/agents/*.md` | `%USERPROFILE%\.claudegents\` |
+| `claude/agents/*.md` | `%USERPROFILE%\.claude\agents\` |
 | `claude/commands/*.md` (con `/office`) | `%USERPROFILE%\.claude\commands\` |
 | `claude/clawd/` (statusline, oficina 3D, `sim-oficina.sh`) | `%USERPROFILE%\.claude\clawd\` |
 | `claude/settings.fragment.json` | se combina en `%USERPROFILE%\.claude\settings.json` (con respaldo) |
@@ -50,10 +50,10 @@ y no toca `settings.json`; si no, los hooks fallarían en cada evento.
 5. **Verificar.** Pídele al usuario que abra una sesión **nueva** de `claude` y:
    - escriba `/agents`: deben aparecer `explorador`, `planificador`, `revisor`,
      `seguridad` y `guia-tdd`;
-   - escriba `/`: deben aparecer `/planear`, `/explicar`, `/tdd`, `/revisar-codigo` y
-     `/seguridad`;
+   - escriba `/`: deben aparecer `/ROLE-Planner`, `/ROLE-Explorer`, `/ROLE-TDD`,
+     `/ROLE-Reviewer` y `/ROLE-Security`;
    - vea a Clawd en la barra de estado y escriba `/office` para abrir la oficina;
-   - pruebe en algún proyecto, por ejemplo `/explicar cómo arranca la app`.
+   - pruebe en algún proyecto, por ejemplo `/ROLE-Explorer cómo arranca la app`.
 
 6. **Contarle al usuario** qué se copió, qué se respaldó y qué se dejó fuera y por qué.
 
@@ -62,7 +62,7 @@ y no toca `settings.json`; si no, los hooks fallarían en cada evento.
 - El Python de un entorno virtual está en `.venv\Scripts\python.exe` (en Mac,
   `.venv/bin/python`). Los agentes ya lo saben; si un proyecto tiene `CLAUDE.md` con rutas de
   Mac, adáptalas en esa PC.
-- En CEREBRO, `/revisar` es la revisión del wiki; el revisor de código es `/revisar-codigo`.
+- En CEREBRO, `/revisar` es la revisión del wiki; el revisor de código es `/ROLE-Reviewer`.
 - Un proyecto puede tener su propio `revisor` en `.claude/agents/revisor.md`, que reemplaza
   al global. Ejemplo en [ejemplos/modelo-dual](ejemplos/modelo-dual).
 

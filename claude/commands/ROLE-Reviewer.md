@@ -1,6 +1,6 @@
 ---
-description: El revisor revisa tus cambios (o el último commit) y reporta por gravedad
-argument-hint: [archivo, carpeta o rango de commits; vacío = cambios sin commit]
+description: The reviewer checks your changes (or the last commit) and reports findings by severity
+argument-hint: [file, folder or commit range; empty = uncommitted changes]
 ---
 Usa el subagente `revisor` para revisar: $ARGUMENTS
 

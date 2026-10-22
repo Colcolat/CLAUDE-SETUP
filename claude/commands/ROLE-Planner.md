@@ -1,6 +1,6 @@
 ---
-description: El planificador arma un plan por pasos antes de un cambio grande
-argument-hint: <qué quieres construir o cambiar>
+description: The planner drafts a step-by-step plan before a big change and waits for your approval
+argument-hint: <what you want to build or change>
 ---
 Usa el subagente `planificador` para planear esto: $ARGUMENTS
 

@@ -1,6 +1,6 @@
 ---
-description: Auditoría de seguridad de los cambios o del proyecto
-argument-hint: [archivo, carpeta o tema; vacío = cambios sin commit]
+description: Security audit of your changes or the project - secrets, injection, data leaks, dependencies
+argument-hint: [file, folder or topic; empty = uncommitted changes]
 ---
 Usa el subagente `seguridad` para auditar: $ARGUMENTS
 

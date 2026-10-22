@@ -14,10 +14,10 @@ Lo que aprendí armando este setup. Corto a propósito.
    y las otras den una segunda opinión, comunicándose por archivos y git, no por chat.
 
 ## El ciclo con los comandos
-1. `/explicar` la parte que vas a cambiar.
-2. `/planear` el cambio y aprueba (o corrige) el plan.
-3. Implementa, a mano, con Claude o con `/tdd`.
-4. `/revisar-codigo` y, si toca datos sensibles, `/seguridad`.
+1. `/ROLE-Explorer` la parte que vas a cambiar.
+2. `/ROLE-Planner` el cambio y aprueba (o corrige) el plan.
+3. Implementa, a mano, con Claude o con `/ROLE-TDD`.
+4. `/ROLE-Reviewer` y, si toca datos sensibles, `/ROLE-Security`.
 5. Corrige lo que reporten y haz commit.
 
 "Un agente escribe y otro revisa": un revisor con una sola tarea encuentra lo que se le pasó
@@ -33,8 +33,8 @@ al que escribió. En su primera prueba encontró dos bugs reales de pérdida de 
   agentes de aquí salieron de
   [everything-claude-code](https://github.com/affaan-m/everything-claude-code) (71 agentes,
   casi todos para JavaScript) y hubo que reescribirlos.
-- **Cuidado con los nombres:** un comando global puede chocar con uno del proyecto (por eso el
-  revisor de código es `/revisar-codigo` y no `/revisar`).
+- **Cuidado con los nombres:** un comando global puede chocar con uno del proyecto (por eso
+  todos los roles empiezan con `ROLE-`: así no chocan con el `/revisar` de CEREBRO).
 - **Un proyecto puede tener su propio agente** con el mismo nombre que uno global para
   especializarlo, como el `revisor` de
   [ejemplos/modelo-dual](ejemplos/modelo-dual/.claude/agents/revisor.md).

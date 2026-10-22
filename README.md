@@ -12,7 +12,7 @@ mandarse mensajes, y mis subagentes y comandos.
 | `claude/clawd/office.html` | `~/.claude/clawd/` | La oficina 3D (three.js): cada agente camina a su zona, se mandan sobres, tablero del equipo |
 | `claude/clawd/sim-oficina.sh` | `~/.claude/clawd/` | Demo sin gastar tokens (equipo completo, y `--gemini`) |
 | `claude/agents/*.md` | `~/.claude/agents/` | Subagentes: explorador, planificador, revisor, seguridad, guia-tdd |
-| `claude/commands/*.md` | `~/.claude/commands/` | `/office`, `/planear`, `/explicar`, `/tdd`, `/revisar-codigo`, `/seguridad` |
+| `claude/commands/*.md` | `~/.claude/commands/` | `/office`, `/ROLE-Planner`, `/ROLE-Explorer`, `/ROLE-TDD`, `/ROLE-Reviewer`, `/ROLE-Security` |
 | `claude/settings.fragment.json` | se combina en `~/.claude/settings.json` | Hooks, statusline, panel de agentes y agent teams activados |
 | `gemini/hooks.json` | se combina en `~/.gemini/config/hooks.json` | Para ver a Gemini (Antigravity) en su estudio de la oficina |
 

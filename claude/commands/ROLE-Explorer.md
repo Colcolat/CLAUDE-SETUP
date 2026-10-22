@@ -1,6 +1,6 @@
 ---
-description: El explorador te explica cómo funciona una parte del proyecto
-argument-hint: <función, flujo o archivo a explicar>
+description: The explorer explains how part of the project works, citing file and line
+argument-hint: <function, flow or file to explain>
 ---
 Usa el subagente `explorador` para explicarme cómo funciona: $ARGUMENTS
 
