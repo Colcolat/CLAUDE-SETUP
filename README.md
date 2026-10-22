@@ -16,6 +16,16 @@ mandarse mensajes, y mis subagentes y comandos.
 | `claude/settings.fragment.json` | se combina en `~/.claude/settings.json` | Hooks, statusline, panel de agentes y agent teams activados |
 | `gemini/hooks.json` | se combina en `~/.gemini/config/hooks.json` | Para ver a Gemini (Antigravity) en su estudio de la oficina |
 
+Además: [PRACTICAS.md](PRACTICAS.md) (cómo trabajar con estos roles) y
+[ejemplos/modelo-dual](ejemplos/modelo-dual) (un `CLAUDE.md` de proyecto y un revisor
+especializado que reemplaza al global).
+
+## Instalar en Windows
+
+Solo los subagentes y los comandos: Clawd es exclusivo de macOS. Sigue
+[INSTALACION-WINDOWS.md](INSTALACION-WINDOWS.md), o abre `claude` en esta carpeta y dile
+*"instala mi setup"*.
+
 ## Instalar en otra Mac
 
 Necesitas `/usr/bin/python3`, que viene con las herramientas de línea de comandos de Xcode

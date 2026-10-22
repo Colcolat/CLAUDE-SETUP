@@ -17,7 +17,7 @@ sencillo, con el riesgo real y cómo arreglarlo.
    si no hay cambios, todo el proyecto empezando por las zonas de riesgo.
 2. **Detecta el stack** (archivos como `requirements.txt`, `pyproject.toml`, `package.json`,
    `pubspec.yaml`) y, si la herramienta ya está instalada, audita dependencias:
-   - Python: `pip-audit` (o `.venv/bin/pip-audit`)
+   - Python: `pip-audit` (o `.venv/bin/pip-audit`; en Windows `.venv\Scripts\pip-audit.exe`)
    - Node: `npm audit --audit-level=high`
    - Flutter/Dart: `dart pub outdated`
    No instales herramientas; si no están, dilo y sigue con la revisión manual.

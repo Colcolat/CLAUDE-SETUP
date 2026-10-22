@@ -17,6 +17,7 @@ cambio la hizo pasar.
   `test/`, `pyproject.toml`, `package.json`, `pubspec.yaml`. Ejemplos:
   - Python con unittest: `.venv/bin/python -m unittest discover tests`
   - Python con pytest: `.venv/bin/python -m pytest`
+  - En Windows el Python del entorno es `.venv\Scripts\python.exe`.
   - Node: `npm test`
   - Flutter: `flutter test`
 - Imita el estilo de las pruebas existentes (nombres, carpetas, cómo simulan archivos o red).
