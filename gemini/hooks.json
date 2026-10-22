@@ -1,0 +1,37 @@
+{
+  "clawd-office": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "/usr/bin/python3 ~/.claude/clawd/clawd.py gemini-hook session-start",
+        "timeout": 5
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/usr/bin/python3 ~/.claude/clawd/clawd.py gemini-hook pre-invocation",
+        "timeout": 5
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 ~/.claude/clawd/clawd.py gemini-hook post-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/usr/bin/python3 ~/.claude/clawd/clawd.py gemini-hook stop",
+        "timeout": 5
+      }
+    ]
+  }
+}

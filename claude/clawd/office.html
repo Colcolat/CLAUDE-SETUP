@@ -1,0 +1,2007 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clawd Office</title>
+<style>
+  :root {
+    --bg: #1c1a24;
+    --panel: rgba(28, 26, 36, 0.82);
+    --line: rgba(255, 255, 255, 0.10);
+    --text: #f1ece4;
+    --muted: #a49cae;
+    --accent: #d97757;
+    --gemini: #8ab4f8;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; }
+  #scene { position: fixed; inset: 0; }
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(6px); }
+  #hud { top: 12px; left: 12px; max-width: calc(100vw - 48px); }
+  #hud b { color: var(--accent); }
+  #hud .sub { color: var(--muted); font-size: 12px; }
+  #hud #gem { color: var(--gemini); display: none; }
+  #dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #777; margin-right: 6px; vertical-align: middle; }
+  #dot.on { background: #78dc8c; box-shadow: 0 0 6px #78dc8c; }
+  #tasks { top: 12px; right: 12px; width: 250px; max-height: 45vh; overflow: auto; }
+  #tasks h3, #feed h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted);
+    font-weight: normal; text-transform: uppercase; letter-spacing: .08em; }
+  #tasks ul { list-style: none; margin: 0; padding: 0; }
+  #tasks li { padding: 3px 0; border-top: 1px solid var(--line); }
+  #tasks li.done { color: var(--muted); text-decoration: line-through; }
+  #tasks .empty { color: var(--muted); }
+  #feed { left: 12px; bottom: 12px; width: min(460px, calc(100vw - 48px)); }
+  #feed div.row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #feed .time { color: var(--muted); margin-right: 6px; }
+  .tag { text-align: center; pointer-events: none; transform: translateY(-4px);
+    text-shadow: 0 1px 2px #000, 0 0 6px rgba(0, 0, 0, .6); white-space: nowrap; }
+  .tag .nm { font-weight: bold; font-size: 13px; }
+  .tag .act { font-size: 11px; color: #e8e2da; opacity: .9; }
+  .zone { pointer-events: none; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(255, 245, 230, .38); text-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
+  .bubble { pointer-events: none; background: #fffaf0; color: #2a2530; border-radius: 8px;
+    padding: 4px 8px; font-size: 11px; max-width: 220px; white-space: normal;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .4); transform: translateY(-8px); }
+  #err { display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  @media (max-width: 640px) {
+    #tasks { display: none; }
+    #feed { font-size: 11px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="scene"></div>
+<div id="hud" class="panel">
+  <div><span id="dot"></span><b>Clawd Office</b></div>
+  <div class="sub" id="sess">waiting for events…</div>
+  <div class="sub" id="gem"></div>
+</div>
+<div id="tasks" class="panel"><h3>Tasks</h3><ul id="tasklist"><li class="empty">no tasks</li></ul></div>
+<div id="feed" class="panel"><h3>Activity</h3><div id="feedrows"></div></div>
+<div id="err" class="panel">Couldn't load three.js (offline?).</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// Filled in by clawd.py from its ROLES registry.
+const ROLES = /*ROLES*/null;
+const ALIASES = /*ALIASES*/null;
+const LABELS = /*LABELS*/null;
+const GEM = { name: 'Gemini', icon: '✦', color: '#8ab4f8' };
+
+const ORANGE = 0xd97757, EYE = 0x141418, WHITE = 0xebebeb, GLASS = 0xafd7fa, GOLD = 0xf0be3c;
+const WOOD = 0x7a5236, DARK = 0x3a3a40;
+const V = 0.5;        // one voxel, in world units
+const WALK = 10;     // walking speed, world units per second
+const GEMINI_STAYS = 180;  // seconds Gemini waits after a turn before leaving
+
+const ACT_ICON = { reading: '🔍', typing: '⌨️', running: '▶', thinking: '💭', asking: '❓',
+  delegating: '📤', working: '🛠', compacting: '🗜', done: '✅', sleeping: '💤', idle: '' };
+const SCREEN = { reading: 0x6fb6ff, typing: 0x78dc8c, running: 0x3cff6e, thinking: 0x9b7bff,
+  asking: 0xffd23c, delegating: 0xd97757, working: 0x5ad2d2, compacting: 0xff9a4a,
+  done: 0x78dc8c, idle: 0x404050, sleeping: 0x202028 };
+
+function roleFor(type) {
+  const base = (type || '').split(':').pop();
+  if (ROLES[base]) return base;
+  return ALIASES[base] || 'ayudante';
+}
+
+// Name, icon and color for an agent: a Claude role, Gemini, or null for the lead.
+function info(a) {
+  if (!a) return null;
+  if (a.kind === 'gemini') return GEM;
+  return a.role ? ROLES[a.role] : null;
+}
+
+// ------------------------------------------------------------- scene
+
+const host = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+host.appendChild(renderer.domElement);
+
+const labels = new CSS2DRenderer();
+labels.domElement.style.position = 'absolute';
+labels.domElement.style.top = '0';
+labels.domElement.style.pointerEvents = 'none';
+host.appendChild(labels.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1c1a24);
+scene.fog = new THREE.Fog(0x1c1a24, 110, 200);
+
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 300);
+camera.position.set(0, 54, 64);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, -5);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.45;
+controls.minDistance = 8;
+controls.maxDistance = 130;
+// Trackpads send small scroll steps: zoom faster, toward the cursor.
+controls.zoomSpeed = 2.5;
+controls.zoomToCursor = true;
+// Arrow keys pan around the room.
+controls.listenToKeyEvents(window);
+controls.keyPanSpeed = 40;
+
+scene.add(new THREE.HemisphereLight(0xfff1e0, 0x3a3048, 1.05));
+const sun = new THREE.DirectionalLight(0xfff1dc, 1.4);
+sun.position.set(18, 44, 26);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -48, right: 48, top: 48, bottom: -48, far: 140 });
+scene.add(sun);
+
+// Materials are shared by color. Plain ones (no extras) get merged at the end.
+const mats = new Map(), plainMats = new Set();
+function mat(color, extra) {
+  const key = color + JSON.stringify(extra || {});
+  if (!mats.has(key)) {
+    const m = new THREE.MeshLambertMaterial({ color, ...extra });
+    mats.set(key, m);
+    if (!extra) plainMats.add(m);
+  }
+  return mats.get(key);
+}
+const glows = new Map();
+function glowStatic(c) {  // shared, never changes color: merged too
+  if (!glows.has(c)) glows.set(c, new THREE.MeshBasicMaterial({ color: c }));
+  return glows.get(c);
+}
+const glowMat = c => new THREE.MeshBasicMaterial({ color: c });  // its own, may animate
+const unit = new THREE.BoxGeometry(1, 1, 1);
+
+// A box from (x0,y0,z0) to (x1,y1,z1), in units of `s`.
+function box(parent, x0, x1, y0, y1, z0, z1, color, s = V, extra) {
+  const m = new THREE.Mesh(unit, extra && extra.material ? extra.material : mat(color, extra));
+  m.scale.set((x1 - x0) * s, (y1 - y0) * s, (z1 - z0) * s);
+  m.position.set((x0 + x1) / 2 * s, (y0 + y1) / 2 * s, (z0 + z1) / 2 * s);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+// A slanted beam from (x0,y0) to (x1,y1), `w` thick, spanning z0..z1.
+function beam(parent, x0, y0, x1, y1, z0, z1, w, material) {
+  const m = new THREE.Mesh(unit, material);
+  m.scale.set(Math.hypot(x1 - x0, y1 - y0), w, z1 - z0);
+  m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  m.rotation.z = Math.atan2(y1 - y0, x1 - x0);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+const P = (x, z) => new THREE.Vector3(x, 0, z);
+const keep = o => { o.userData.keep = true; return o; };  // animated: never merge
+
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'));
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function rgba(hex, a) {
+  const c = new THREE.Color(hex);
+  return `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${a})`;
+}
+
+// Static scenery goes in `world`, merged into a couple of meshes at the end.
+const world = new THREE.Group();
+scene.add(world);
+
+// ------------------------------------------------------------- floor plan
+
+// A 1-unit grid of what is taken: 1 furniture, 2 walkway. Decoration only
+// goes where both are free, so nothing overlaps or blocks a path.
+const GRID_X0 = -40, GRID_Z0 = -38, GRID_W = 80, GRID_H = 64;
+const grid = new Uint8Array(GRID_W * GRID_H);
+function markRect(x0, z0, x1, z1, v = 1) {
+  for (let x = Math.floor(x0); x < Math.ceil(x1); x++) for (let z = Math.floor(z0); z < Math.ceil(z1); z++) {
+    const i = x - GRID_X0, j = z - GRID_Z0;
+    if (i >= 0 && j >= 0 && i < GRID_W && j < GRID_H) grid[j * GRID_W + i] |= v;
+  }
+}
+function isFree(x0, z0, x1, z1) {
+  for (let x = Math.floor(x0); x < Math.ceil(x1); x++) for (let z = Math.floor(z0); z < Math.ceil(z1); z++) {
+    const i = x - GRID_X0, j = z - GRID_Z0;
+    if (i < 0 || j < 0 || i >= GRID_W || j >= GRID_H || grid[j * GRID_W + i]) return false;
+  }
+  return true;
+}
+function markBox(obj, pad = 0.3) {
+  obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj);
+  markRect(b.min.x - pad, b.min.z - pad, b.max.x + pad, b.max.z + pad);
+}
+function markPath(pts, r) {
+  for (let k = 1; k < pts.length; k++) {
+    const a = pts[k - 1], b = pts[k], n = Math.ceil(a.distanceTo(b) * 2);
+    for (let s = 0; s <= n; s++) {
+      const p = a.clone().lerp(b, s / n);
+      markRect(p.x - r, p.z - r, p.x + r, p.z + r, 2);
+    }
+  }
+}
+
+// Walkways: agents come in through the door and follow these aisles, so
+// they never cut through furniture. Each desk is reached from its nearest node.
+const OUT = P(-45, 10), IN = P(-35.5, 10);
+const NODES = { in: IN, A: P(-22, 6), B: P(-22, -10), C: P(-12, -16), D: P(0, -18), E: P(12, -16),
+  F: P(22, -10), G: P(22, 4), H: P(-14, 0), I: P(0, 0), J: P(14, 0) };
+const EDGES = [['in', 'A'], ['A', 'H'], ['A', 'B'], ['B', 'C'], ['C', 'D'], ['D', 'E'], ['E', 'F'],
+  ['F', 'J'], ['F', 'G'], ['H', 'I'], ['I', 'J'], ['J', 'G'], ['B', 'H'], ['C', 'H'], ['E', 'J']];
+for (const [a, b] of EDGES) markPath([NODES[a], NODES[b]], 1.6);
+markRect(-40, 7, -33, 13, 2);  // the doorway
+
+// Shortest walk from the door to the node nearest `p` (Dijkstra on the aisles).
+function route(p) {
+  let goal = null;
+  for (const k in NODES) if (k !== 'in' && (!goal || NODES[k].distanceTo(p) < NODES[goal].distanceTo(p))) goal = k;
+  const dist = { in: 0 }, prev = {}, todo = new Set(Object.keys(NODES));
+  while (todo.size) {
+    let u = null;
+    for (const k of todo) if (dist[k] !== undefined && (u === null || dist[k] < dist[u])) u = k;
+    if (u === null || u === goal) break;
+    todo.delete(u);
+    for (const [a, b] of EDGES) {
+      const v = a === u ? b : b === u ? a : null;
+      if (!v || !todo.has(v)) continue;
+      const d = dist[u] + NODES[u].distanceTo(NODES[v]);
+      if (dist[v] === undefined || d < dist[v]) { dist[v] = d; prev[v] = u; }
+    }
+  }
+  const out = [];
+  for (let k = goal; k; k = prev[k]) out.unshift(NODES[k]);
+  return out;  // starts at IN
+}
+
+// Where each role lives; the floor tint and the mixed decoration fade out from here.
+const ANCHORS = [
+  { key: 'explorador', x: -29.5, z: -22 }, { key: 'planificador', x: -16, z: -26 },
+  { key: 'revisor', x: 0, z: -29 }, { key: 'seguridad', x: 16, z: -26 },
+  { key: 'guia-tdd', x: 30.5, z: -22 }, { key: 'ayudante', x: -30, z: -2 },
+  { key: 'gemini', x: 33.5, z: 14 },
+];
+const themeColor = k => k === 'gemini' ? GEM.color : ROLES[k].color;
+
+// ------------------------------------------------------------- the attic
+
+// Warm wooden planks.
+const floorTex = canvasTexture(256, 256, g => {
+  const tones = ['#b98d64', '#b0855c', '#a97e57', '#bf9469', '#a47a54'];
+  for (let row = 0; row < 8; row++) {
+    let x = -((row * 37) % 96), n = 0;
+    while (x < 256) {
+      const w = 70 + ((row * 13 + n * 29) % 60);
+      g.fillStyle = tones[(row * 3 + n) % tones.length];
+      g.fillRect(x, row * 32, w, 32);
+      g.fillStyle = 'rgba(70, 40, 20, .35)';
+      g.fillRect(x, row * 32, 2, 32);
+      x += w; n++;
+    }
+    g.fillStyle = 'rgba(70, 40, 20, .3)';
+    g.fillRect(0, row * 32, 256, 2);
+  }
+});
+floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+floorTex.repeat.set(7, 6);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 64), new THREE.MeshLambertMaterial({ map: floorTex }));
+floor.rotation.x = -Math.PI / 2;
+floor.position.z = -6;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// A soft wash of each role's color over the floor, fading into its neighbors.
+{
+  const W = 640, H = 512, k = W / 80;
+  const tint = canvasTexture(W, H, g => {
+    const spot = (x, z, r, color, a) => {
+      const cx = (x + 40) * k, cy = (z + 38) * k, rr = r * k;
+      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
+      grad.addColorStop(0, rgba(color, a));
+      grad.addColorStop(1, rgba(color, 0));
+      g.fillStyle = grad;
+      g.fillRect(cx - rr, cy - rr, rr * 2, rr * 2);
+    };
+    for (const a of ANCHORS) spot(a.x, a.z, 16, themeColor(a.key), 0.34);
+    spot(0, -8.5, 11, '#f0be3c', 0.18);  // the lead's hub
+    spot(0, 15, 13, '#d97757', 0.14);    // the lounge
+  });
+  const wash = new THREE.Mesh(new THREE.PlaneGeometry(80, 64),
+    new THREE.MeshLambertMaterial({ map: tint, transparent: true, depthWrite: false }));
+  wash.rotation.x = -Math.PI / 2;
+  wash.position.set(0, 0.015, -6);
+  wash.receiveShadow = true;
+  scene.add(wash);
+}
+
+const WALL = 0xe6dacb, TRIM = 0x8a5a3a;
+// Back wall: the attic's gable end.
+{
+  const s = new THREE.Shape();
+  s.moveTo(-40.6, 0); s.lineTo(40.6, 0); s.lineTo(40.6, 8); s.lineTo(24, 18); s.lineTo(-24, 18); s.lineTo(-40.6, 8);
+  const wall = new THREE.Mesh(new THREE.ExtrudeGeometry(s, { depth: 0.6, bevelEnabled: false }),
+    new THREE.MeshLambertMaterial({ color: WALL }));
+  wall.position.z = -38.6;
+  wall.receiveShadow = true;
+  scene.add(wall);
+}
+beam(world, -40.6, 8, -24, 18, -38.1, -37.6, 0.6, mat(TRIM));
+beam(world, 40.6, 8, 24, 18, -38.1, -37.6, 0.6, mat(TRIM));
+box(world, -24, 24, 17.7, 18.3, -38.1, -37.6, TRIM, 1);
+box(world, -40, 40, 0, 0.6, -38.1, -37.9, 0x8a6a4e, 1);  // skirting
+// A small square window high on the gable.
+box(world, -2, 2, 11.5, 15.5, -38.05, -37.9, WOOD, 1);
+box(world, -1.6, 1.6, 11.9, 15.1, -37.92, -37.86, 0x9fd0ff, 1, { emissive: 0x2a4a6a });
+box(world, -0.1, 0.1, 11.9, 15.1, -37.86, -37.8, WHITE, 1);
+box(world, -1.6, 1.6, 13.4, 13.6, -37.86, -37.8, WHITE, 1);
+
+// Knee walls, 8 high, with the door on the left (z 7..13).
+box(world, -40.6, -40, 0, 8, -38.6, 7, WALL, 1);
+box(world, -40.6, -40, 0, 8, 13, 26, WALL, 1);
+box(world, -40.6, -40, 7.4, 8, 7, 13, WALL, 1);
+box(world, 40, 40.6, 0, 8, -38.6, 26, WALL, 1);
+box(world, -40, -39.9, 0, 0.6, -38, 26, 0x8a6a4e, 1);
+box(world, 39.9, 40, 0, 0.6, -38, 26, 0x8a6a4e, 1);
+// The roof slopes in above them. Like a dollhouse, they only show from the
+// inside: seen from above they are see-through, so nothing by the walls hides.
+for (const d of [-1, 1]) {
+  const x0 = d * 40.4, x1 = d * 33.4, y0 = 8, y1 = 12.4;
+  const slope = new THREE.Mesh(new THREE.PlaneGeometry(64.6, Math.hypot(x1 - x0, y1 - y0)),
+    new THREE.MeshLambertMaterial({ color: 0xa8744c }));
+  slope.position.set((x0 + x1) / 2, (y0 + y1) / 2, -6.3);
+  slope.lookAt(slope.position.clone().add(new THREE.Vector3(-d * (y1 - y0), -(Math.abs(x1 - x0)), 0)));
+  scene.add(slope);
+}
+
+// The door the agents use.
+box(world, -40.1, -39.7, 0, 7.6, 6.6, 7, WOOD, 1);
+box(world, -40.1, -39.7, 0, 7.6, 13, 13.4, WOOD, 1);
+box(world, -40.1, -39.7, 7.4, 7.8, 6.6, 13.4, WOOD, 1);
+const door = keep(new THREE.Group());
+door.position.set(-40.1, 0, 7);
+world.add(door);
+box(door, -0.15, 0.15, 0, 7.3, 0, 6, 0x9c6b45, 1);
+box(door, 0.15, 0.35, 3.3, 3.6, 5.1, 5.5, GOLD, 1);
+door.open = 0;
+box(world, -39.6, -36.4, 0.01, 0.06, 7.6, 12.4, 0x6b4e3a, 1);  // doormat
+
+// Windows with curtains: two on the back wall, one on the right.
+for (const wx of [-26, 26]) {
+  box(world, wx - 6, wx + 6, 3.5, 8.5, -38.05, -37.95, 0x9fd0ff, 1, { emissive: 0x2a4a6a });
+  box(world, wx - 0.15, wx + 0.15, 3.5, 8.5, -37.95, -37.85, WHITE, 1);
+  box(world, wx - 6.3, wx + 6.3, 3.3, 3.5, -38, -37.6, WOOD, 1);
+  for (const cx of [wx - 7.2, wx + 6.2]) box(world, cx, cx + 1, 3, 9, -37.9, -37.5, 0xc96f4a, 1);
+}
+box(world, 39.95, 40.05, 3.5, 7.5, -6, 4, 0x9fd0ff, 1, { emissive: 0x2a4a6a });
+box(world, 39.85, 39.95, 3.5, 7.5, -1.15, -0.85, WHITE, 1);
+for (const cz of [-7.2, 4.2]) box(world, 39.5, 39.9, 3, 7.8, cz, cz + 1, 0xc96f4a, 1);
+{
+  const t = canvasTexture(512, 96, g => {
+    g.fillStyle = '#2a2530'; g.fillRect(0, 0, 512, 96);
+    g.fillStyle = '#d97757'; g.font = 'bold 56px Menlo, monospace';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('CLAWD & CO.', 256, 52);
+  });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(16, 3), new THREE.MeshBasicMaterial({ map: t }));
+  sign.position.set(0, 6.3, -37.9);
+  scene.add(sign);
+}
+// Framed art high on the gable.
+function art(x, y, w, h, colors) {
+  box(world, x - w / 2, x + w / 2, y, y + h, -37.95, -37.8, WOOD, 1);
+  box(world, x - w / 2 + 0.2, x + w / 2 - 0.2, y + 0.2, y + h - 0.2, -37.8, -37.76, colors[0], 1);
+  colors.slice(1).forEach((c, i) => {
+    const x0 = x - w / 2 + 0.5 + i * (w - 1) / (colors.length - 1);
+    box(world, x0, x0 + (w - 1) / (colors.length - 1) - 0.25, y + 0.5 + (i % 2) * 0.5, y + h - 0.6, -37.76, -37.73, c, 1);
+  });
+}
+art(-14, 9.6, 4.2, 3, [0xf3e3c3, 0x4285f4, 0xd96570, 0x3cba8a]);
+art(14, 9.6, 4.2, 3, [0x1e2a44, 0xffd27a, 0x9b72cb]);
+
+// String lights along the gable and both knee walls.
+{
+  const C = [0xffd27a, 0xffb36b, 0xfff1c2, 0xff9d7a];
+  let i = 0;
+  const bulb = (x, y, z) => box(world, x - 0.2, x + 0.2, y - 0.35, y, z - 0.2, z + 0.2, 0, 1, { material: glowStatic(C[i++ % 4]) });
+  for (let t = 0; t <= 1.001; t += 1 / 7) {
+    bulb(-40 + 16 * t, 8.3 + 9.4 * t - 0.4 * Math.sin(t * Math.PI * 7), -37.4);
+    bulb(40 - 16 * t, 8.3 + 9.4 * t - 0.4 * Math.sin(t * Math.PI * 7), -37.4);
+  }
+  for (let x = -22; x <= 22; x += 2.4) bulb(x, 17.4 - 0.4 * Math.abs(Math.sin(x * Math.PI / 4.8)), -37.4);
+  for (let z = -36; z <= 25; z += 2.4) {
+    const y = 7.6 - 0.4 * Math.abs(Math.sin(z * Math.PI / 9.6));
+    if (z < 6 || z > 14) bulb(-39.6, y, z);
+    bulb(39.6, y, z);
+  }
+}
+
+// Beams across the attic, with hanging plants and more lights. They fade out
+// when the camera comes close, so they never hide the agents.
+const fadeMats = [];
+const fading = (c, basic) => {
+  const m = basic ? new THREE.MeshBasicMaterial({ color: c, transparent: true })
+    : new THREE.MeshLambertMaterial({ color: c, transparent: true });
+  fadeMats.push(m);
+  return m;
+};
+const roof = new THREE.Group();
+scene.add(roof);
+{
+  const fBeam = fading(0x7a5236), fRope = fading(0x8a7a60), fPot = fading(0xb5653f);
+  const fLeaf = fading(0x4f9a52), fLeaf2 = fading(0x6fc06f), fBulb = fading(0xffd27a, true);
+  // Only a short ridge by the gable, and cross beams over the aisles, so
+  // nothing hangs over a desk.
+  box(roof, -0.5, 0.5, 17.3, 18.2, -38, -30, 0, 1, { material: fBeam });
+  const hanging = (x, z) => {
+    box(roof, x - 0.06, x + 0.06, 12, 14.6, z - 0.06, z + 0.06, 0, 1, { material: fRope });
+    box(roof, x - 0.7, x + 0.7, 11.1, 12.1, z - 0.7, z + 0.7, 0, 1, { material: fPot });
+    box(roof, x - 0.9, x + 0.9, 11.9, 12.5, z - 0.9, z + 0.9, 0, 1, { material: fLeaf });
+    for (const [vx, vz, len] of [[-0.6, 0.3, 1.8], [0.2, -0.5, 2.4], [0.6, 0.5, 1.3]])
+      box(roof, x + vx - 0.18, x + vx + 0.18, 11.4 - len, 11.4, z + vz - 0.18, z + vz + 0.18, 0, 1, { material: fLeaf2 });
+  };
+  for (const z of [-18, 1.5, 24]) {
+    box(roof, -29, 29, 14.7, 15.3, z - 0.3, z + 0.3, 0, 1, { material: fBeam });
+    beam(roof, -29, 15, -34.4, 12.2, z - 0.25, z + 0.25, 0.5, fBeam);
+    beam(roof, 29, 15, 34.4, 12.2, z - 0.25, z + 0.25, 0.5, fBeam);
+    for (let x = -27; x <= 27; x += 3) {
+      const y = 14.5 - 0.35 * Math.abs(Math.sin(x * Math.PI / 6));
+      box(roof, x - 0.2, x + 0.2, y - 0.35, y, z - 0.2, z + 0.2, 0, 1, { material: fBulb });
+    }
+    if (z < 20) for (const hx of [-25, 25]) hanging(hx, z);
+  }
+  roof.traverse(o => { o.castShadow = false; });
+}
+
+// ------------------------------------------------------------- furniture
+
+const DESK_Y = 1.25;
+function makeDesk(x, z, w = 8, top = 0xc9a27a, parent = scene) {
+  const g = keep(new THREE.Group());
+  box(g, -w / 2, w / 2, DESK_Y - 0.2, DESK_Y, -1.3, 1.3, top, 1);
+  for (const lx of [-w / 2 + 0.3, w / 2 - 0.3]) for (const lz of [-1.0, 1.0])
+    box(g, lx - 0.15, lx + 0.15, 0, DESK_Y - 0.2, lz - 0.15, lz + 0.15, 0x5a5a62, 1);
+  // Laptop: hinge on the camera side, screen facing the agent behind it.
+  box(g, -1.0, 1.0, DESK_Y, DESK_Y + 0.08, -0.7, 0.5, 0x8c8c96, 1);
+  const hinge = new THREE.Group();
+  hinge.position.set(0, DESK_Y + 0.08, 0.5);
+  g.add(hinge);
+  const lid = new THREE.Group();
+  hinge.add(lid);
+  box(lid, -1.0, 1.0, 0, 1.3, 0, 0.08, 0x9a9aa4, 1);
+  const screenMat = new THREE.MeshBasicMaterial({ color: SCREEN.sleeping });
+  box(lid, -0.9, 0.9, 0.1, 1.2, -0.01, 0, 0, 1, { material: screenMat });
+  const logoMat = new THREE.MeshBasicMaterial({ color: 0x555560 });
+  box(lid, -0.25, 0.25, 0.45, 0.85, 0.08, 0.1, 0, 1, { material: logoMat });
+  const glow = new THREE.PointLight(SCREEN.idle, 0, 5, 1.6);
+  glow.position.set(0, DESK_Y + 0.9, -0.8);
+  g.add(glow);
+  hinge.rotation.x = -Math.PI / 2 + 0.03;
+  g.position.set(x, 0, z);
+  parent.add(g);
+  return { group: g, hinge, screenMat, logoMat, glow, open: 0 };
+}
+
+// A desk lamp with a warm shade, and a little potted plant.
+function deskLamp(g, x, z, y = DESK_Y) {
+  box(g, x - 0.35, x + 0.35, y, y + 0.1, z - 0.35, z + 0.35, DARK, 1);
+  box(g, x - 0.06, x + 0.06, y + 0.1, y + 1.3, z - 0.06, z + 0.06, DARK, 1);
+  box(g, x - 0.45, x + 0.45, y + 1.15, y + 1.6, z - 0.45, z + 0.45, 0, 1, { material: glowStatic(0xffd27a) });
+}
+function pottedPlant(g, x, y, z, k = 1) {
+  box(g, x - 0.35 * k, x + 0.35 * k, y, y + 0.6 * k, z - 0.35 * k, z + 0.35 * k, 0xb5653f, 1);
+  box(g, x - 0.55 * k, x + 0.55 * k, y + 0.6 * k, y + 1.3 * k, z - 0.55 * k, z + 0.55 * k, 0x4f9a52, 1);
+  box(g, x - 0.3 * k, x + 0.3 * k, y + 1.3 * k, y + 1.7 * k, z - 0.3 * k, z + 0.3 * k, 0x6fc06f, 1);
+}
+function plant(g, x, z) {
+  box(g, x - 1, x + 1, 0, 1.5, z - 1, z + 1, 0xb5653f, 1);
+  box(g, x - 1.5, x + 1.5, 1.5, 3.5, z - 1.5, z + 1.5, 0x4f9a52, 1);
+  box(g, x - 1, x + 1, 3.5, 5, z - 1, z + 1, 0x5fb062, 1);
+  box(g, x - 0.5, x + 0.5, 5, 6, z - 0.5, z + 0.5, 0x6fc06f, 1);
+}
+// A floor lamp that really lights its corner.
+function floorLamp(g, x, z) {
+  box(g, x - 0.6, x + 0.6, 0, 0.2, z - 0.6, z + 0.6, DARK, 1);
+  box(g, x - 0.1, x + 0.1, 0.2, 4.6, z - 0.1, z + 0.1, DARK, 1);
+  box(g, x - 0.9, x + 0.9, 4.4, 5.6, z - 0.9, z + 0.9, 0, 1, { material: glowStatic(0xffd9a0) });
+  const l = new THREE.PointLight(0xffc27a, 3, 18, 1.4);
+  l.position.set(x, 4.2, z);
+  g.add(l);
+}
+const BOOKC = [0xb5483e, 0x3f6fb5, 0x4f9a52, 0xd9a43a, 0x7a4e7a, 0x2f4f5a, 0xc96f4a];
+function books(g, x0, x1, y, z0, z1, seed = 0) {
+  for (let x = x0, i = seed; x < x1 - 0.3; i++) {
+    const w = 0.28 + ((i * 7) % 4) * 0.07, h = 0.8 + ((i * 5) % 3) * 0.18;
+    box(g, x, x + w, y, y + h, z0, z1, BOOKC[((i % BOOKC.length) + BOOKC.length) % BOOKC.length], 1);
+    x += w + 0.04;
+  }
+}
+function crate(g, x, y, z, s) {
+  box(g, x - s, x + s, y, y + 2 * s, z - s, z + s, 0xb08550, 1);
+  box(g, x - s, x + s, y + s * 0.8, y + s * 1.2, z + s, z + s + 0.05, 0x8a6440, 1);
+}
+
+const decorAnim = [];   // per-frame updates for cameras, globes, flasks...
+const seats = {};
+
+function zoneLabel(text, pos) {
+  const el = document.createElement('div');
+  el.className = 'zone';
+  el.textContent = text;
+  const o = new CSS2DObject(el);
+  o.position.set(pos.x, 0.2, pos.z);
+  scene.add(o);
+}
+
+// A themed desk: a round rug that glows while someone works there, the desk
+// and its decoration, all turned to face `rot` (0 faces the camera, PI/2
+// faces right). The agent walks the aisles to the side nearer the room's
+// center, and the decoration goes on the other side (local +x is mirrored).
+function zone(key, x, z, decor, opts = {}) {
+  const o = opts.info || ROLES[key];
+  const root = new THREE.Group();
+  root.position.set(x, 0, z);
+  root.rotation.y = opts.rot || 0;
+  world.add(root);
+  root.updateMatrixWorld(true);
+  const at = (lx, lz) => root.localToWorld(new THREE.Vector3(lx, 0, lz)).setY(0);
+  const side = at(6.5, 4.5).length() < at(-6.5, 4.5).length() ? 1 : -1;
+  const seatPos = at(0, -3.3), approach = at(side * 6.5, 4.5);
+  const path = [OUT, ...route(approach), approach, at(side * 6.5, -3.3), seatPos];
+  const rugMat = new THREE.MeshLambertMaterial({
+    color: new THREE.Color(o.color).lerp(new THREE.Color(0x7a5a44), 0.45),
+    emissive: new THREE.Color(o.color), emissiveIntensity: 0 });
+  const rug = new THREE.Mesh(new THREE.CircleGeometry(5.2, 28), rugMat);
+  rug.rotation.x = -Math.PI / 2;
+  rug.position.set(0, 0.04, -1.8);
+  rug.receiveShadow = true;
+  root.add(rug);
+  const seat = { key, desk: makeDesk(0, 0, opts.w || 8, opts.top, root), seatPos, face: root.rotation.y,
+    path, rugMat, agent: null };
+  const g = new THREE.Group();
+  g.scale.x = -side;
+  root.add(g);
+  decor(g, fn => decorAnim.push(t => fn(t, seat)));
+  if (opts.lamp !== false) deskLamp(g, opts.lampX ?? -3.2, -0.7);
+  markBox(root);
+  markPath(path.slice(-3), 1.2);
+  zoneLabel(o.icon + ' ' + (opts.label || o.name), at(0, 4.4));
+  seats[key] = seat;
+  return seat;
+}
+
+// The decorations, in world units around the desk (desk at the origin, the
+// agent sits at z -3.3, decoration on +x and behind, at z -6 to -9).
+
+function decorExplorer(g, anim) {
+  box(g, -3.6, -3.3, 0, 5.8, -8.2, -7.9, WOOD, 1);
+  box(g, 3.3, 3.6, 0, 5.8, -8.2, -7.9, WOOD, 1);
+  box(g, -3.8, 3.8, 2.4, 5.8, -8.1, -7.8, 0xb8875a, 1);   // cork board
+  box(g, -3.4, 3.4, 2.7, 5.5, -7.8, -7.75, 0xe8dcb5, 1);  // the map
+  box(g, -3.0, -1.2, 3.4, 4.9, -7.75, -7.7, 0x9cc28a, 1);
+  box(g, 0.2, 2.6, 2.9, 4.2, -7.75, -7.7, 0x9cc28a, 1);
+  box(g, 1.2, 2.9, 4.6, 5.3, -7.75, -7.7, 0x9cc28a, 1);
+  for (let k = 0; k < 7; k++) {  // the route, in red dots
+    const y = 3.7 + Math.sin(k * 0.9) * 0.6;
+    box(g, -2.6 + k * 0.75, -2.4 + k * 0.75, y, y + 0.2, -7.7, -7.66, 0xd9363e, 1);
+  }
+  box(g, 2.0, 2.3, 4.0, 4.3, -7.7, -7.5, 0xd9363e, 1);    // pin
+  // Globe on a stand.
+  box(g, 5.4, 6.6, 0, 0.3, -6.6, -5.4, WOOD, 1);
+  box(g, 5.9, 6.1, 0.3, 2.0, -6.1, -5.9, WOOD, 1);
+  const globe = keep(new THREE.Group());
+  globe.position.set(6, 2.9, -6);
+  globe.rotation.z = 0.4;
+  g.add(globe);
+  const spin = new THREE.Group();
+  globe.add(spin);
+  spin.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.95, 1),
+    new THREE.MeshLambertMaterial({ color: 0x4f8fd6, flatShading: true })));
+  box(spin, -0.5, 0.3, 0.1, 0.6, 0.55, 0.95, 0x6fbf6a, 1);
+  box(spin, 0.3, 0.9, -0.5, 0.0, -0.2, 0.5, 0x6fbf6a, 1);
+  box(spin, -0.9, -0.4, -0.4, 0.2, -0.6, 0.0, 0x6fbf6a, 1);
+  anim(t => { spin.rotation.y = t * 0.6; });
+  // Backpack with a bedroll.
+  box(g, 5.2, 6.8, 0, 2.0, -2.8, -1.8, 0x6f7a3e, 1);
+  box(g, 5.2, 6.8, 1.5, 2.1, -1.85, -1.6, 0x5d6634, 1);
+  box(g, 5.5, 6.5, 0.3, 1.1, -1.8, -1.55, 0x5d6634, 1);
+  box(g, 5.0, 7.0, 2.0, 2.6, -2.7, -2.0, 0xb5653f, 1);
+  // Palm in a pot.
+  box(g, 6.1, 7.5, 0, 1.2, -9.7, -8.3, 0xb5653f, 1);
+  for (let i = 0; i < 6; i++) box(g, 6.55 + i * 0.07, 7.05 + i * 0.07, 1.2 + i * 0.8, 2.0 + i * 0.8, -9.25, -8.75, 0x8a6a45, 1);
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const cx = 7.2, cz = -9, L = 2.4;
+    box(g, cx + Math.min(0, dx * L) - 0.3, cx + Math.max(0, dx * L) + 0.3, 5.8, 6.2,
+      cz + Math.min(0, dz * L) - 0.3, cz + Math.max(0, dz * L) + 0.3, 0x4f9a52, 1);
+    box(g, cx + dx * L - 0.3, cx + dx * L + 0.3, 5.2, 5.8, cz + dz * L - 0.3, cz + dz * L + 0.3, 0x5fb062, 1);
+  }
+}
+
+function decorPlanner(g, anim) {
+  box(g, -3.5, -3.3, 0, 6.2, -8.1, -7.9, 0x8c8c96, 1);
+  box(g, 3.3, 3.5, 0, 6.2, -8.1, -7.9, 0x8c8c96, 1);
+  box(g, -3.8, 3.8, 2.4, 6.2, -8.2, -7.9, 0xb0b0b8, 1);   // whiteboard frame
+  box(g, -3.6, 3.6, 2.6, 6.0, -7.9, -7.85, 0xfafafa, 1);
+  for (const cx of [-1.2, 1.2]) box(g, cx - 0.04, cx + 0.04, 2.7, 5.9, -7.85, -7.82, 0x9a9aa4, 1);
+  const NOTES = [0xffe066, 0xff9ecb, 0x8fd3ff, 0xa6e3a1];
+  for (let col = 0; col < 3; col++) for (let row = 0; row < 3 - col; row++) {
+    const x = -3.3 + col * 2.4, y = 5.2 - row * 0.85;
+    box(g, x, x + 0.75, y, y + 0.65, -7.85, -7.78, NOTES[(col + row * 2) % 4], 1);
+    if (row < 2 - col) box(g, x + 0.95, x + 1.7, y, y + 0.65, -7.85, -7.78, NOTES[(col + row + 1) % 4], 1);
+  }
+  // Bin of rolled blueprints.
+  box(g, 5.2, 6.8, 0, 1.6, -6.3, -4.7, WOOD, 1);
+  box(g, 5.4, 5.8, 1.2, 3.4, -5.9, -5.5, 0x3f6fb5, 1);
+  box(g, 6.0, 6.4, 1.2, 3.0, -5.4, -5.0, 0x5a8ad0, 1);
+  box(g, 5.7, 6.1, 1.2, 3.7, -5.2, -4.8, 0xd6e4f5, 1);
+  // Traffic cone.
+  box(g, 5.6, 7.2, 0, 0.2, -2.2, -0.6, 0xff7a1a, 1);
+  box(g, 5.9, 6.9, 0.2, 0.9, -1.9, -0.9, 0xff7a1a, 1);
+  box(g, 6.0, 6.8, 0.9, 1.2, -1.8, -1.0, WHITE, 1);
+  box(g, 6.1, 6.7, 1.2, 1.8, -1.7, -1.1, 0xff7a1a, 1);
+  box(g, 6.25, 6.55, 1.8, 2.2, -1.55, -1.25, 0xff7a1a, 1);
+  // A spare hard hat on the desk.
+  box(g, 2.5, 3.4, 1.25, 1.75, 0.0, 0.9, 0xf5c828, 1);
+  box(g, 2.3, 3.6, 1.25, 1.35, -0.15, 1.05, 0xf5c828, 1);
+}
+
+function decorReviewer(g, anim) {
+  const BOOKS = [0xb5483e, 0x3f6fb5, 0x4f9a52, 0xd9a43a, 0x7a4e7a, 0x2f4f5a, 0xc96f4a];
+  box(g, -4, 4, 0, 5.4, -8.6, -7.4, WOOD, 1);               // bookshelf
+  for (const sy of [0.3, 2.0, 3.7]) {
+    box(g, -3.8, 3.8, sy - 0.15, sy, -7.4, -7.0, 0x8c6240, 1);
+    for (let x = -3.7, i = 0; x < 3.4; i++) {
+      const w = 0.3 + ((i * 7 + sy * 10) % 4) * 0.08, h = 1.0 + ((i * 5) % 3) * 0.18;
+      box(g, x, x + w, sy, sy + h, -7.35, -7.05, BOOKS[(i + Math.round(sy * 3)) % BOOKS.length], 1);
+      x += w + 0.05;
+    }
+  }
+  // Paper stacks, one with red corrections.
+  for (let k = 0; k < 4; k++) box(g, -3.4 + k * 0.05, -2.2 + k * 0.05, 1.25 + k * 0.12, 1.36 + k * 0.12, -0.2, 0.7, 0xf4f1ea, 1);
+  for (let k = 0; k < 2; k++) box(g, 1.6, 2.6, 1.25 + k * 0.12, 1.36 + k * 0.12, 0.1, 0.9, k ? 0xf4d6d0 : 0xf4f1ea, 1);
+  // Magnifier lamp.
+  box(g, 2.9, 3.7, 1.25, 1.4, -1.1, -0.4, DARK, 1);
+  box(g, 3.25, 3.35, 1.4, 2.7, -0.8, -0.7, DARK, 1);
+  box(g, 2.6, 3.9, 2.6, 2.75, -1.2, 0.0, DARK, 1);
+  box(g, 2.75, 3.75, 2.52, 2.6, -1.05, -0.15, 0, 1, { material: glowMat(0xcfe8ff) });
+  // Cup of red pencils.
+  box(g, -3.7, -3.1, 1.25, 1.85, -1.2, -0.6, 0x2f4f7a, 1);
+  box(g, -3.55, -3.45, 1.85, 2.4, -1.0, -0.9, 0xd9363e, 1);
+  box(g, -3.35, -3.25, 1.85, 2.25, -0.85, -0.75, 0xd9363e, 1);
+  // Filing cabinet with in-trays.
+  box(g, 5, 7, 0, 3.4, -6.2, -4.4, 0x8a9099, 1);
+  for (const y of [0.9, 2.1]) box(g, 5.2, 6.8, y, y + 0.1, -4.4, -4.35, 0x6a7079, 1);
+  box(g, 5.2, 6.8, 3.4, 3.6, -6.0, -4.6, 0x4a4a52, 1);
+  box(g, 5.4, 6.6, 3.6, 3.75, -5.8, -4.8, 0xf4f1ea, 1);
+}
+
+function decorSecurity(g, anim) {
+  // CCTV wall behind the chair.
+  box(g, -3.4, 3.4, 0, 2.2, -8.4, -7.6, 0x2a2d35, 1);
+  box(g, -3.4, 3.4, 2.2, 6.2, -8.6, -8.2, 0x1c1e24, 1);
+  const screens = [];
+  for (const [sx, sy] of [[-3.2, 2.4], [0.1, 2.4], [-3.2, 4.3], [0.1, 4.3]]) {
+    const m = glowMat(0x2f7a52);
+    box(g, sx, sx + 3.1, sy, sy + 1.7, -8.2, -8.05, 0, 1, { material: m });
+    screens.push(m);
+  }
+  anim(t => screens.forEach((m, i) => m.color.setHSL(0.4, 0.45, 0.2 + 0.07 * Math.sin(t * 2.5 + i * 1.7))));
+  // Safe with a gold dial.
+  box(g, 5, 7.4, 0, 2.6, -7.4, -5, 0x3c4048, 1);
+  box(g, 5.2, 7.2, 0.2, 2.4, -5, -4.95, 0x4f545d, 1);
+  box(g, 5.9, 6.5, 1.0, 1.6, -4.95, -4.75, GOLD, 1);
+  box(g, 6.8, 7.0, 0.7, 1.9, -4.95, -4.8, 0x9a9aa0, 1);
+  // Two cameras on poles, sweeping, with a blinking light.
+  for (const [px, pz] of [[7.4, -9.2], [-7.4, -9.2]]) {
+    box(g, px - 0.12, px + 0.12, 0, 5.2, pz - 0.12, pz + 0.12, 0x55555c, 1);
+    const cam = keep(new THREE.Group());
+    cam.position.set(px, 5.4, pz);
+    g.add(cam);
+    box(cam, -0.35, 0.35, -0.3, 0.3, -0.3, 1.0, 0xe6e6ea, 1);
+    box(cam, -0.2, 0.2, -0.2, 0.2, 1.0, 1.1, 0x111114, 1);
+    const led = glowMat(0xff3030);
+    box(cam, -0.08, 0.08, 0.3, 0.4, 0.6, 0.76, 0, 1, { material: led });
+    const aim = Math.atan2(-px, 6 - pz);
+    anim(t => {
+      cam.rotation.y = aim + Math.sin(t * 0.6 + px) * 0.6;
+      led.color.setHex(Math.sin(t * 4 + px) > 0 ? 0xff3030 : 0x401010);
+    });
+  }
+  // Padlock on the desk.
+  box(g, 2.6, 3.3, 1.25, 1.8, 0.2, 0.7, GOLD, 1);
+  box(g, 2.75, 2.85, 1.8, 2.15, 0.4, 0.5, 0xa0a0a8, 1);
+  box(g, 3.05, 3.15, 1.8, 2.15, 0.4, 0.5, 0xa0a0a8, 1);
+  box(g, 2.75, 3.15, 2.05, 2.15, 0.4, 0.5, 0xa0a0a8, 1);
+}
+
+function decorTDD(g, anim) {
+  // Lab bench with bubbling flasks, red and green.
+  box(g, -3.8, 3.8, 0, 2.2, -8.4, -6.8, 0xdedede, 1);
+  box(g, -4, 4, 2.2, 2.4, -8.6, -6.6, DARK, 1);
+  const glass = mat(0xd8f0ff, { transparent: true, opacity: 0.35 });
+  for (let i = 0; i < 5; i++) {
+    const x = -3.4 + i * 1.5, h = 0.5 + (i % 3) * 0.2;
+    box(g, x, x + 0.8, 2.4, 3.7, -7.9, -7.1, 0, 1, { material: glass });
+    const liquid = keep(box(g, x + 0.1, x + 0.7, 2.45, 2.45 + h, -7.8, -7.2, i % 2 ? 0xd9363e : 0x3cc06a, 1));
+    const base = liquid.scale.y, y0 = 2.45;
+    anim(t => {
+      liquid.scale.y = base * (1 + 0.12 * Math.sin(t * 4 + i));
+      liquid.position.y = y0 + liquid.scale.y / 2;
+    });
+  }
+  // A traffic light that follows the TDD cycle: red while writing the test,
+  // green when it runs and passes.
+  box(g, 6.5, 6.7, 0, 4, -2.1, -1.9, DARK, 1);
+  box(g, 6.1, 7.1, 4, 6.6, -2.4, -1.6, 0x1c1c20, 1);
+  const lights = [0xff3030, 0xffc030, 0x30ff60].map((c, i) => {
+    const m = glowMat(0x202020);
+    box(g, 6.3, 6.9, 5.9 - i * 0.8 - 0.3, 5.9 - i * 0.8 + 0.3, -1.6, -1.5, 0, 1, { material: m });
+    return [m, c];
+  });
+  anim((t, seat) => {
+    const a = seat.agent && seat.agent.seated ? seat.agent.act : null;
+    const on = a === 'running' || a === 'done' ? 2 : a === 'typing' ? 1 : a ? 0 : -1;
+    lights.forEach(([m, c], i) => m.color.setHex(i === on ? c : 0x202020));
+  });
+  // Fire extinguisher, just in case.
+  box(g, 6.6, 7.4, 0, 1.8, -8.4, -7.6, 0xd9363e, 1);
+  box(g, 6.85, 7.15, 1.8, 2.2, -8.15, -7.85, 0x222226, 1);
+  box(g, 7.4, 7.55, 1.0, 2.0, -8.1, -7.9, 0x222226, 1);
+  // Test tubes on the desk.
+  box(g, 2.2, 3.6, 1.25, 1.45, -0.9, -0.4, 0x8c6240, 1);
+  [0xd9363e, 0x3cc06a, 0xd8f0ff].forEach((c, i) =>
+    box(g, 2.35 + i * 0.42, 2.6 + i * 0.42, 1.45, 2.2, -0.75, -0.55, c, 1));
+}
+
+function decorWorkshop(g, anim) {
+  box(g, -3.8, -3.5, 0, 5.8, -8.2, -7.9, WOOD, 1);   // posts, outside the board
+  box(g, 3.5, 3.8, 0, 5.8, -8.2, -7.9, WOOD, 1);
+  box(g, -3.5, 3.5, 1.4, 5.6, -8.2, -7.95, 0xc8a878, 1);   // pegboard
+  // Tools hang a little in front of the board, never touching the posts.
+  const TOOLS = [
+    [-2.6, -2.4, 2.2, 4.2, 0x8a5a36], [-3.0, -2.0, 4.2, 4.6, 0x8c8c96],    // hammer
+    [-1.3, -1.05, 2.0, 4.4, 0xa0a0a8], [-1.55, -0.8, 4.4, 4.8, 0xa0a0a8],  // wrench
+    [-0.2, 1.6, 3.0, 3.9, 0xc0c0c8], [1.6, 2.2, 2.9, 4.0, 0x8a5a36],       // saw
+    [2.6, 2.72, 2.2, 3.4, 0xa0a0a8], [2.55, 2.78, 3.4, 4.2, 0xe0a020],     // screwdriver
+  ];
+  for (const [x0, x1, y0, y1, c] of TOOLS) box(g, x0, x1, y0, y1, -7.92, -7.78, c, 1);
+  // Peg holes on a regular grid, skipping the spots behind the tools.
+  const clear = (x, y) => !TOOLS.some(([x0, x1, y0, y1]) => x > x0 - 0.15 && x < x1 + 0.15 && y > y0 - 0.15 && y < y1 + 0.15);
+  for (let x = -3.0; x <= 3.01; x += 0.75) for (let y = 1.8; y <= 5.3; y += 0.7)
+    if (clear(x, y)) box(g, x - 0.05, x + 0.05, y - 0.05, y + 0.05, -7.95, -7.94, 0x6a5238, 1);
+  // Red toolbox and stacked crates.
+  box(g, 5.0, 7.2, 0, 1.3, -1.8, -0.6, 0xc8372d, 1);
+  box(g, 4.95, 7.25, 1.3, 1.5, -1.85, -0.55, 0xa82e26, 1);
+  box(g, 5.8, 6.4, 1.5, 1.9, -1.25, -1.15, 0x2a2a2a, 1);
+  crate(g, 6.2, 0, -6.5, 1.0);
+  crate(g, 6.0, 2.0, -6.6, 0.7);
+}
+
+// Gemini's study: a tall bookshelf behind the star, a reading armchair, a
+// warm lamp, a chalkboard and a bean bag.
+function decorStudy(g, anim) {
+  box(g, -3.2, 3.2, 0, 6.4, -5.8, -4.7, WOOD, 1);
+  for (const [n, sy] of [0.3, 1.9, 3.5, 5.0].entries()) {
+    box(g, -3.0, 3.0, sy - 0.12, sy, -4.7, -4.4, 0x8c6240, 1);
+    books(g, -2.9, 2.9, sy, -4.68, -4.42, n * 5);
+  }
+  const ax = 5.6, az = 0.5;
+  box(g, ax - 1.6, ax + 1.6, 0, 1.3, az - 1.6, az + 1.4, 0x6b5aa8, 1);
+  box(g, ax - 1.6, ax + 1.6, 1.3, 3.6, az - 1.6, az - 0.8, 0x5c4c96, 1);
+  box(g, ax - 2.1, ax - 1.6, 0, 2.2, az - 1.6, az + 1.4, 0x5c4c96, 1);
+  box(g, ax + 1.6, ax + 2.1, 0, 2.2, az - 1.6, az + 1.4, 0x5c4c96, 1);
+  box(g, ax - 1.4, ax + 1.4, 1.3, 1.7, az - 0.8, az + 1.2, 0x7b6ab8, 1);
+  floorLamp(g, 7.6, -2.6);
+  const chalk = canvasTexture(256, 160, c => {
+    c.fillStyle = '#2f4a3a'; c.fillRect(0, 0, 256, 160);
+    c.fillStyle = '#e8efe6'; c.font = '28px Menlo, monospace';
+    c.fillText('learn++', 24, 56);
+    c.font = '22px Menlo, monospace';
+    c.fillText('✦ a² + b² = c²', 24, 100);
+    c.fillText('∑ notes', 24, 136);
+  });
+  box(g, -7.4, -7.2, 0, 5.2, -2.4, -2.2, WOOD, 1);
+  box(g, -4.0, -3.8, 0, 5.2, -2.4, -2.2, WOOD, 1);
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 2.4), new THREE.MeshLambertMaterial({ map: chalk }));
+  board.position.set(-5.6, 3.7, -2.15);
+  g.add(board);
+  box(g, 3.4, 5.8, 0, 0.9, 3.0, 5.4, 0x8e7cc3, 1);   // bean bag
+  box(g, 3.8, 5.4, 0.9, 1.4, 3.4, 5.0, 0x8e7cc3, 1);
+  box(g, 3.6, 5.6, 0.9, 2.0, 2.9, 3.5, 0x7b6ab8, 1);
+  box(g, 1.0, 2.2, DESK_Y, DESK_Y + 0.5, 0.0, 0.9, 0x9b72cb, 1);   // books and a mug
+  box(g, 1.1, 2.1, DESK_Y + 0.5, DESK_Y + 0.85, 0.1, 0.8, 0x4285f4, 1);
+  box(g, -1.9, -1.4, DESK_Y, DESK_Y + 0.6, 0.2, 0.7, WHITE, 1);
+}
+
+zone('explorador', -29.5, -22, decorExplorer, { rot: Math.PI / 2 });
+zone('planificador', -16, -26, decorPlanner);
+zone('revisor', 0, -29, decorReviewer, { lamp: false });
+zone('seguridad', 16, -26, decorSecurity);
+zone('guia-tdd', 30.5, -22, decorTDD, { rot: -Math.PI / 2 });
+zone('ayudante', -30, -2, decorWorkshop, { rot: Math.PI / 2, top: 0x9c7a52 });
+zone('gemini', 33.5, 14, decorStudy, { rot: -Math.PI / 2, info: GEM, label: "Gemini's Study",
+  w: 6, top: 0xd8c3a0, lampX: -2.5 });
+const ZONE_KEYS = ['explorador', 'planificador', 'revisor', 'seguridad', 'guia-tdd'];
+const geminiSeat = seats.gemini;
+
+// ------------------------------------------------------------- the lead's hub
+
+// Claude coordinates from the middle: a U-shaped desk, a team board with a
+// light per role, a tray where the reports land and a small meeting table.
+const hub = new THREE.Group();
+world.add(hub);
+const leadRug = new THREE.MeshLambertMaterial({ color: 0x7a4e7a, emissive: new THREE.Color(GOLD), emissiveIntensity: 0 });
+{
+  const rug = new THREE.Mesh(new THREE.CircleGeometry(7, 32), leadRug);
+  rug.rotation.x = -Math.PI / 2;
+  rug.position.set(0, 0.04, -8.5);
+  rug.receiveShadow = true;
+  hub.add(rug);
+}
+const leadSeat = { key: 'lead', desk: makeDesk(0, -6.2, 10, 0x6b4a36, hub), seatPos: P(0, -9.5), face: 0,
+  path: [], rugMat: leadRug, agent: null };
+for (const x0 of [-5, 3.9]) {  // the U's wings
+  box(hub, x0, x0 + 1.1, DESK_Y - 0.2, DESK_Y, -10.8, -7.5, 0x6b4a36, 1);
+  box(hub, x0 + 0.4, x0 + 0.7, 0, DESK_Y - 0.2, -10.6, -10.3, 0x5a5a62, 1);
+}
+deskLamp(hub, -4.3, -6.6);
+pottedPlant(hub, 4.3, DESK_Y, -6.6, 0.7);
+box(hub, -4.9, -4.0, DESK_Y, DESK_Y + 0.6, -10.4, -9.6, WHITE, 1);  // a mug on the wing
+// Report tray: envelopes for Claude land here.
+box(hub, 1.7, 3.1, DESK_Y, DESK_Y + 0.12, -6.3, -5.1, 0x8c8c96, 1);
+box(hub, 1.7, 3.1, DESK_Y + 0.12, DESK_Y + 0.3, -5.15, -5.05, 0x8c8c96, 1);
+const TRAY = new THREE.Vector3(2.4, DESK_Y + 0.2, -5.7);
+// The team board behind Claude.
+const boardLamps = {};
+{
+  box(hub, -6.6, -6.3, 0, 7.6, -14.6, -14.3, WOOD, 1);
+  box(hub, 6.3, 6.6, 0, 7.6, -14.6, -14.3, WOOD, 1);
+  box(hub, -6.8, 6.8, 2.6, 7.8, -14.7, -14.35, 0x4a3426, 1);
+  const team = [...ZONE_KEYS, 'ayudante', 'gemini'];
+  const tex = canvasTexture(1040, 384, c => {
+    c.fillStyle = '#1e2433'; c.fillRect(0, 0, 1040, 384);
+    c.fillStyle = '#f0be3c'; c.font = 'bold 30px Menlo, monospace'; c.textAlign = 'center';
+    c.fillText('THE TEAM', 520, 44);
+    c.font = '20px Menlo, monospace';
+    team.forEach((k, i) => {
+      const o = k === 'gemini' ? GEM : ROLES[k];
+      c.fillStyle = o.color;
+      c.fillText(o.name, 520 + (-5.4 + i * 1.8) * 80, 300);
+    });
+  });
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(13, 4.8), new THREE.MeshBasicMaterial({ map: tex }));
+  screen.position.set(0, 5.2, -14.33);
+  hub.add(screen);
+  team.forEach((k, i) => {
+    const m = glowMat(0x2a2a30), x = -5.4 + i * 1.8;
+    box(hub, x - 0.5, x + 0.5, 4.7, 5.7, -14.33, -14.15, 0, 1, { material: m });
+    boardLamps[k] = { mat: m, color: new THREE.Color(k === 'gemini' ? GEM.color : ROLES[k].color) };
+  });
+}
+// Meeting table on the right, printer cabinet and a big plant on the left.
+box(hub, 7.2, 10.8, 1.0, 1.2, -9.7, -7.3, 0xc9a27a, 1);
+for (const [lx, lz] of [[7.5, -9.4], [10.5, -9.4], [7.5, -7.6], [10.5, -7.6]]) box(hub, lx - 0.12, lx + 0.12, 0, 1.0, lz - 0.12, lz + 0.12, 0x5a5a62, 1);
+for (const [sx, sz] of [[9, -10.8], [9, -6.2], [11.8, -8.5]]) {
+  box(hub, sx - 0.45, sx + 0.45, 0.7, 0.9, sz - 0.45, sz + 0.45, 0x8e6a4a, 1);
+  box(hub, sx - 0.1, sx + 0.1, 0, 0.7, sz - 0.1, sz + 0.1, 0x5a5a62, 1);
+}
+pottedPlant(hub, 9.8, 1.2, -8.1, 0.6);
+box(hub, 7.8, 8.3, 1.2, 1.7, -8.8, -8.3, WHITE, 1);
+box(hub, 8.2, 9.4, 1.2, 1.26, -8.0, -7.5, 0xf4f1ea, 1);
+box(hub, -10.2, -7.8, 0, 2, -9.4, -7.6, 0x8a9099, 1);
+box(hub, -10.0, -8.0, 2, 2.7, -9.2, -7.8, 0xe6e6ea, 1);
+box(hub, -9.6, -8.4, 2.7, 2.8, -9.0, -8.0, 0xf4f1ea, 1);
+plant(hub, -9.5, -12.5);
+markBox(hub);
+
+// ------------------------------------------------------------- lounge and kitchen
+
+// The lounge in front: two sofas facing each other, a coffee table, bean
+// bags, a warm lamp, and low bookshelves between it and the hub.
+const lounge = new THREE.Group();
+world.add(lounge);
+box(lounge, -14.4, 14.4, 0.005, 0.04, 7.6, 22.9, 0x6b3f50, 1);
+box(lounge, -14, 14, 0.01, 0.06, 8, 22.5, 0x8c5a6e, 1);
+for (const d of [-1, 1]) {
+  const x = d * 9;  // d < 0 faces right, d > 0 faces left
+  box(lounge, x - 1.6, x + 1.6, 0, 1.3, 11.5, 18.5, 0x8c4b3e, 1);
+  box(lounge, d < 0 ? x - 2.2 : x + 1.4, d < 0 ? x - 1.4 : x + 2.2, 0, 3.2, 11.5, 18.5, 0x7a4036, 1);
+  box(lounge, x - 2.2, x + 2.2, 0, 2.2, 10.8, 11.5, 0x7a4036, 1);
+  box(lounge, x - 2.2, x + 2.2, 0, 2.2, 18.5, 19.2, 0x7a4036, 1);
+  for (const cz of [11.8, 15.1]) box(lounge, x - 1.4, x + 1.4, 1.3, 1.7, cz, cz + 3.1, 0xa65c4b, 1);
+  box(lounge, d < 0 ? x - 1.4 : x + 0.6, d < 0 ? x - 0.6 : x + 1.4, 1.7, 2.8, 12.4, 13.6, 0xf2b84b, 1);  // cushion
+}
+box(lounge, -2.6, 2.6, 0, 1.0, 13.3, 16.7, WOOD, 1);
+box(lounge, -1.8, -1.3, 1.0, 1.5, 14.0, 14.5, WHITE, 1);
+box(lounge, 0.8, 1.3, 1.0, 1.5, 15.4, 15.9, WHITE, 1);
+for (let k = 0; k < 3; k++) box(lounge, -0.6, 0.6, 1.0 + k * 0.2, 1.18 + k * 0.2, 14.6, 15.6, BOOKC[k + 2], 1);
+pottedPlant(lounge, 1.6, 1.0, 14.2, 0.6);
+for (const [bx, bz, c] of [[-5, 20.6, 0xf2b84b], [0, 21.2, 0x3cba8a], [5, 20.6, 0x4a90c8]]) {
+  box(lounge, bx - 1.2, bx + 1.2, 0, 0.9, bz - 1.2, bz + 1.2, c, 1);
+  box(lounge, bx - 0.9, bx + 0.9, 0.9, 1.4, bz - 0.9, bz + 0.9, c, 1);
+  box(lounge, bx - 1.0, bx + 1.0, 0.9, 2.0, bz + 0.6, bz + 1.2, c, 1);
+}
+floorLamp(lounge, -12.6, 9.2);
+box(lounge, 11.6, 13.2, 0, 1.4, 8.6, 10.2, WOOD, 1);
+deskLamp(lounge, 12.4, 9.4, 1.4);
+pottedPlant(lounge, -12.8, 0, 21.6, 1.6);
+pottedPlant(lounge, 12.8, 0, 21.6, 1.6);
+for (const [x0, x1] of [[-12, -4.5], [4.5, 12]]) {
+  box(lounge, x0, x1, 0, 2.3, 4.4, 5.4, WOOD, 1);
+  box(lounge, x0 + 0.1, x1 - 0.1, 1.05, 1.15, 5.4, 5.6, 0x8c6240, 1);
+  books(lounge, x0 + 0.2, x1 - 0.2, 0.15, 5.4, 5.65, Math.round(x0));
+  pottedPlant(lounge, x0 + 1, 2.3, 4.9, 0.6);
+  pottedPlant(lounge, x1 - 1, 2.3, 4.9, 0.6);
+}
+markBox(lounge);
+
+// A kitchenette by the door: counter, coffee machine, fridge and a round table.
+const kitchen = new THREE.Group();
+world.add(kitchen);
+box(kitchen, -39.8, -37.4, 0, 2.6, 15.5, 22.5, 0x8c6240, 1);
+box(kitchen, -39.9, -37.2, 2.6, 2.8, 15.4, 22.6, 0xd8d0c4, 1);
+box(kitchen, -39.6, -38.2, 2.8, 4.6, 16.2, 17.8, 0x2c2c30, 1);
+box(kitchen, -38.2, -38.1, 4.0, 4.2, 16.8, 17.0, 0, 1, { material: glowStatic(0xff5a4a) });
+box(kitchen, -39.0, -38.5, 2.8, 3.3, 18.4, 18.9, WHITE, 1);
+for (let k = 0; k < 3; k++) box(kitchen, -39.5, -38.7, 2.8, 3.6 + k * 0.2, 19.6 + k * 0.9, 20.3 + k * 0.9, [0xd96570, 0xf2b84b, 0x8fd3ff][k], 1);
+box(kitchen, -39.8, -37.4, 0, 5.4, 23, 25.6, 0xdfe6ea, 1);
+box(kitchen, -37.4, -37.25, 2.2, 4.2, 23.4, 23.6, 0x9a9aa0, 1);
+box(kitchen, -39.95, -39.0, 5.2, 5.4, 15.5, 22.5, WOOD, 1);
+for (const sz of [16.2, 18.4, 20.6]) pottedPlant(kitchen, -39.45, 5.4, sz, 0.55);
+box(kitchen, -32.4, -29.6, 1.6, 1.8, 17.6, 20.4, 0xc9a27a, 1);
+box(kitchen, -31.2, -30.8, 0, 1.6, 18.8, 19.2, 0x5a5a62, 1);
+for (const [sx, sz] of [[-33.4, 19], [-28.6, 19], [-31, 21.6]]) {
+  box(kitchen, sx - 0.5, sx + 0.5, 1.0, 1.2, sz - 0.5, sz + 0.5, 0x8e6a4a, 1);
+  box(kitchen, sx - 0.1, sx + 0.1, 0, 1.0, sz - 0.1, sz + 0.1, 0x5a5a62, 1);
+}
+box(kitchen, -31.5, -31.0, 1.8, 2.3, 18.4, 18.9, WHITE, 1);
+plant(kitchen, -26, 24.5);
+markBox(kitchen);
+
+// Water cooler and corner plants.
+box(world, 36.4, 38.8, 0, 3.2, -3.2, -0.8, 0xe8e8ec, 1);
+box(world, 36.8, 38.4, 3.2, 5.2, -2.8, -1.2, 0x9fd0ff, 1, { transparent: true, opacity: 0.6 });
+box(world, 36.2, 36.4, 2.2, 2.5, -2.2, -1.8, 0x4a7ac0, 1);
+markRect(36, -3.5, 39, -0.5);
+plant(world, -37.5, -35.5);
+plant(world, 37.5, -35.5);
+markRect(-39, -37, -36, -34);
+markRect(36, -37, 39, -34);
+
+// When every desk is taken, agents stand by the lounge.
+const SPOTS = [[-6, 9.5], [6, 9.5], [-3, 9.5], [3, 9.5]];
+const spots = SPOTS.map(([x, z]) => ({ key: 'spot', desk: null, seatPos: P(x, z), face: 0,
+  path: [OUT, ...route(P(x, z)), P(x, z)], agent: null }));
+const allSeats = [leadSeat, ...Object.values(seats), ...spots];
+
+function pickSeat(role) {
+  const free = s => s && !s.agent ? s : null;
+  if (role === 'gemini') return free(geminiSeat) || spots.find(s => !s.agent) || spots[0];
+  return free(seats[role]) || free(seats.ayudante) ||
+    ZONE_KEYS.map(k => seats[k]).find(s => !s.agent) || spots.find(s => !s.agent) || spots[0];
+}
+
+// ------------------------------------------------------------- blended decoration
+
+// Small things each role leaves around. Every free spot near the walls or
+// around the desks picks a role weighted by how close each desk is, so the
+// Reviewer's books slowly give way to Security's cameras, and so on.
+const globeGeo = new THREE.IcosahedronGeometry(0.75, 1);
+const globeMat = new THREE.MeshLambertMaterial({ color: 0x4f8fd6, flatShading: true });
+const PROPS = {
+  explorador: [
+    g => pottedPlant(g, 0, 0, 0, 1.8),
+    g => {
+      box(g, -0.7, 0.7, 0, 1.8, -0.4, 0.4, 0x6f7a3e, 1);
+      box(g, -0.7, 0.7, 1.4, 1.9, 0.4, 0.6, 0x5d6634, 1);
+      box(g, -0.5, 0.5, 0.3, 1.0, 0.4, 0.62, 0x5d6634, 1);
+      box(g, -0.8, 0.8, 1.8, 2.3, -0.3, 0.3, 0xb5653f, 1);
+    },
+    g => {
+      box(g, -0.6, 0.6, 0, 0.3, -0.6, 0.6, WOOD, 1);
+      box(g, -0.1, 0.1, 0.3, 1.8, -0.1, 0.1, WOOD, 1);
+      const s = new THREE.Mesh(globeGeo, globeMat);
+      s.position.y = 2.5;
+      s.castShadow = true;
+      g.add(s);
+      box(g, -0.4, 0.2, 2.5, 2.9, 0.45, 0.8, 0x6fbf6a, 1);
+    },
+    g => {
+      crate(g, 0, 0, 0, 0.9);
+      box(g, -0.5, -0.2, 1.8, 3.0, -0.3, 0, 0xe8dcb5, 1);
+      box(g, 0, 0.3, 1.8, 2.7, 0, 0.3, 0xd8c8a0, 1);
+      box(g, 0.4, 0.7, 1.8, 3.2, -0.2, 0.1, 0xe8dcb5, 1);
+    },
+  ],
+  planificador: [
+    g => {
+      box(g, -0.8, 0.8, 0, 0.2, -0.8, 0.8, 0xff7a1a, 1);
+      box(g, -0.5, 0.5, 0.2, 0.9, -0.5, 0.5, 0xff7a1a, 1);
+      box(g, -0.4, 0.4, 0.9, 1.2, -0.4, 0.4, WHITE, 1);
+      box(g, -0.3, 0.3, 1.2, 1.8, -0.3, 0.3, 0xff7a1a, 1);
+    },
+    g => {
+      box(g, -0.8, 0.8, 0, 1.6, -0.8, 0.8, WOOD, 1);
+      box(g, -0.6, -0.2, 1.2, 3.4, -0.4, 0, 0x3f6fb5, 1);
+      box(g, 0, 0.4, 1.2, 3.0, 0.1, 0.5, 0x5a8ad0, 1);
+      box(g, -0.2, 0.2, 1.2, 3.7, -0.1, 0.3, 0xd6e4f5, 1);
+    },
+    g => {
+      box(g, -1.0, -0.85, 0, 3.6, -0.1, 0.1, 0x8c8c96, 1);
+      box(g, 0.85, 1.0, 0, 3.6, -0.1, 0.1, 0x8c8c96, 1);
+      box(g, -1.2, 1.2, 1.8, 3.6, 0.1, 0.25, 0xfafafa, 1);
+      [0xffe066, 0xff9ecb, 0x8fd3ff, 0xa6e3a1].forEach((c, i) =>
+        box(g, -1.0 + i * 0.5, -0.6 + i * 0.5, 2.6 + (i % 2) * 0.5, 2.95 + (i % 2) * 0.5, 0.25, 0.3, c, 1));
+    },
+    g => {
+      for (let k = 0; k < 3; k++) box(g, -0.8 + k * 0.08, 0.8 + k * 0.08, k * 0.85, k * 0.85 + 0.8, -0.6, 0.6, 0xd8c8a0, 1);
+      box(g, -0.3, 0.3, 1.9, 2.2, 0.6, 0.65, WHITE, 1);
+    },
+  ],
+  revisor: [
+    g => { for (let k = 0; k < 5; k++) box(g, -0.6 + (k % 2) * 0.12, 0.6 + (k % 2) * 0.12, k * 0.25, k * 0.25 + 0.22, -0.45, 0.45, BOOKC[k], 1); },
+    g => {
+      box(g, -1.1, 1.1, 0, 1.9, -0.5, 0.5, WOOD, 1);
+      books(g, -1.0, 1.0, 0.1, 0.5, 0.72, 3);
+      books(g, -1.0, 1.0, 1.0, 0.5, 0.72, 9);
+    },
+    g => {
+      box(g, -0.5, 0.5, 0, 0.15, -0.5, 0.5, DARK, 1);
+      box(g, -0.07, 0.07, 0.15, 3.3, -0.07, 0.07, DARK, 1);
+      box(g, -0.55, 0.55, 3.1, 3.8, -0.55, 0.55, 0, 1, { material: glowStatic(0xffe2a8) });
+    },
+    g => {
+      box(g, -0.7, 0.7, 0, 0.8, -0.5, 0.5, 0xd8c8a0, 1);
+      box(g, -0.6, 0.6, 0.8, 0.95, -0.4, 0.4, 0xf4f1ea, 1);
+    },
+  ],
+  seguridad: [
+    g => {
+      box(g, -0.6, 0.6, 0, 3.4, -0.5, 0.5, 0x8a9099, 1);
+      for (const y of [2.5, 2.7, 2.9]) box(g, -0.4, 0.4, y, y + 0.08, 0.5, 0.53, 0x5a6069, 1);
+      box(g, 0.35, 0.45, 1.4, 1.9, 0.5, 0.56, 0x3a3a40, 1);
+    },
+    g => {
+      box(g, -0.7, 0.7, 0, 3.6, -0.6, 0.6, 0x1c1e24, 1);
+      for (let r = 0; r < 6; r++) for (let c = 0; c < 3; c++)
+        box(g, -0.45 + c * 0.35, -0.33 + c * 0.35, 0.5 + r * 0.5, 0.6 + r * 0.5, 0.6, 0.64, 0, 1,
+          { material: glowStatic((r + c) % 3 ? 0x3cff6e : 0x4a9fff) });
+    },
+    g => {
+      box(g, -0.12, 0.12, 0, 4.2, -0.12, 0.12, 0x55555c, 1);
+      box(g, -0.3, 0.3, 4.1, 4.6, -0.3, 0.9, 0xe6e6ea, 1);
+      box(g, -0.18, 0.18, 4.17, 4.53, 0.9, 1.0, 0x111114, 1);
+      box(g, -0.08, 0.08, 4.6, 4.7, 0.4, 0.55, 0, 1, { material: glowStatic(0xff3030) });
+    },
+    g => {
+      box(g, -0.7, 0.7, 0, 1.4, -0.6, 0.6, 0x3c4048, 1);
+      box(g, -0.15, 0.15, 0.55, 0.85, 0.6, 0.7, GOLD, 1);
+    },
+  ],
+  'guia-tdd': [
+    g => {
+      box(g, -1, 1, 1.4, 1.6, -0.6, 0.6, 0x3a3a40, 1);
+      for (const [lx, lz] of [[-0.85, -0.45], [0.85, -0.45], [-0.85, 0.45], [0.85, 0.45]]) box(g, lx - 0.08, lx + 0.08, 0, 1.4, lz - 0.08, lz + 0.08, 0x5a5a62, 1);
+      box(g, -0.7, -0.3, 1.6, 2.4, -0.2, 0.2, 0xd8f0ff, 1);
+      box(g, -0.65, -0.35, 1.6, 2.0, -0.15, 0.25, 0xd9363e, 1);
+      box(g, 0.2, 0.6, 1.6, 2.2, -0.2, 0.2, 0xd8f0ff, 1);
+      box(g, 0.25, 0.55, 1.6, 1.9, -0.15, 0.25, 0x3cc06a, 1);
+    },
+    g => {
+      box(g, -0.6, 0.6, 0, 1.2, -0.6, 0.6, 0xcfe8f0, 1);
+      box(g, -0.4, 0.4, 1.2, 2.2, -0.4, 0.4, 0x4f9a52, 1);
+      box(g, -0.2, 0.2, 2.2, 2.6, -0.2, 0.2, 0x6fc06f, 1);
+    },
+    g => {
+      box(g, -0.1, 0.1, 0, 3, -0.1, 0.1, DARK, 1);
+      box(g, -0.4, 0.4, 3, 4.6, -0.3, 0.3, 0x1c1c20, 1);
+      box(g, -0.25, 0.25, 3.25, 3.65, 0.3, 0.36, 0, 1, { material: glowStatic(0x30ff60) });
+      box(g, -0.25, 0.25, 3.95, 4.35, 0.3, 0.36, 0, 1, { material: glowStatic(0x402020) });
+    },
+    g => {
+      box(g, -0.5, 0.5, 1.1, 1.3, -0.5, 0.5, 0x8e6a4a, 1);
+      box(g, -0.1, 0.1, 0, 1.1, -0.1, 0.1, 0x5a5a62, 1);
+      box(g, -0.2, 0.2, 1.3, 1.9, -0.2, 0.2, 0xd8f0ff, 1);
+    },
+  ],
+  ayudante: [
+    g => { crate(g, 0, 0, 0, 0.9); crate(g, 0.1, 1.8, 0.1, 0.6); },
+    g => {
+      box(g, -1.0, 1.0, 0, 1.1, -0.5, 0.5, 0xc8372d, 1);
+      box(g, -1.05, 1.05, 1.1, 1.3, -0.55, 0.55, 0xa82e26, 1);
+      box(g, -0.3, 0.3, 1.3, 1.7, -0.05, 0.05, 0x2a2a2a, 1);
+    },
+    g => {
+      box(g, -1.1, 1.1, 1.2, 1.5, -0.2, 0.2, 0xb08550, 1);
+      for (const lx of [-0.9, 0.9]) for (const lz of [-0.4, 0.4]) box(g, lx - 0.08, lx + 0.08, 0, 1.2, lz - 0.08, lz + 0.08, 0x8a6440, 1);
+    },
+    g => {
+      box(g, -0.7, 0.7, 0, 1.8, -0.7, 0.7, 0x8a5a36, 1);
+      for (const y of [0.3, 1.4]) box(g, -0.75, 0.75, y, y + 0.15, -0.75, 0.75, 0x3a3a40, 1);
+    },
+  ],
+  gemini: [
+    g => { for (let k = 0; k < 4; k++) box(g, -0.6 + (k % 2) * 0.1, 0.6 + (k % 2) * 0.1, k * 0.25, k * 0.25 + 0.22, -0.45, 0.45, [0x4285f4, 0x9b72cb, 0xd96570, 0x3cba8a][k], 1); },
+    g => {
+      box(g, -1.1, 1.1, 0, 0.9, -1.1, 1.1, 0x9b72cb, 1);
+      box(g, -0.8, 0.8, 0.9, 1.4, -0.8, 0.8, 0x9b72cb, 1);
+      box(g, -0.9, 0.9, 0.9, 1.9, -1.1, -0.5, 0x8e7cc3, 1);
+    },
+    g => pottedPlant(g, 0, 0, 0, 1.4),
+  ],
+};
+// Things on the walls: posters, monitors, shelves. `stand` ones sit on the floor.
+const WALL_PROPS = {
+  explorador: [{ build: g => {
+    box(g, -1.6, 1.6, 4, 6.4, 0, 0.12, WOOD, 1);
+    box(g, -1.4, 1.4, 4.2, 6.2, 0.12, 0.16, 0xe8dcb5, 1);
+    box(g, -1.1, -0.2, 4.6, 5.6, 0.16, 0.19, 0x9cc28a, 1);
+    box(g, 0.2, 1.1, 4.5, 5.2, 0.16, 0.19, 0x9cc28a, 1);
+    for (let k = 0; k < 4; k++) box(g, -0.9 + k * 0.6, -0.75 + k * 0.6, 5.0 + (k % 2) * 0.3, 5.15 + (k % 2) * 0.3, 0.19, 0.22, 0xd9363e, 1);
+  } }],
+  planificador: [{ build: g => {
+    box(g, -1.5, 1.5, 4, 6.3, 0, 0.12, 0x3f6fb5, 1);
+    for (const y of [4.4, 5.0, 5.6]) box(g, -1.2, 1.2, y, y + 0.06, 0.12, 0.15, WHITE, 1);
+    box(g, -0.3, -0.24, 4.3, 6.0, 0.12, 0.15, WHITE, 1);
+  } }],
+  revisor: [{ stand: true, build: g => {
+    box(g, -1.5, 1.5, 0, 4.6, 0, 1.0, WOOD, 1);
+    for (const [n, y] of [0.2, 1.7, 3.2].entries()) books(g, -1.4, 1.4, y, 1.0, 1.25, n * 4);
+  } }, { build: g => {  // a floating shelf, when the floor below is taken
+    box(g, -1.5, 1.5, 4.0, 4.15, 0, 0.8, WOOD, 1);
+    books(g, -1.4, 1.4, 4.15, 0.1, 0.7, 2);
+  } }],
+  seguridad: [{ build: g => {
+    box(g, -1.6, 1.6, 3.6, 5.8, 0, 0.2, 0x1c1e24, 1);
+    box(g, -1.4, -0.1, 3.8, 5.6, 0.2, 0.24, 0, 1, { material: glowStatic(0x2f7a52) });
+    box(g, 0.1, 1.4, 3.8, 5.6, 0.2, 0.24, 0, 1, { material: glowStatic(0x3a8a62) });
+  } }],
+  'guia-tdd': [{ build: g => {
+    box(g, -1.5, 1.5, 4.2, 4.4, 0, 0.9, WOOD, 1);
+    for (const lx of [-1.3, 1.1]) box(g, lx, lx + 0.2, 3.8, 4.2, 0, 0.3, DARK, 1);
+    [0xd9363e, 0x3cc06a, 0xd8f0ff, 0x3cc06a].forEach((c, i) => box(g, -1.2 + i * 0.7, -0.8 + i * 0.7, 4.4, 5.1 + (i % 2) * 0.3, 0.2, 0.6, c, 1));
+  } }],
+  ayudante: [{ build: g => {
+    box(g, -1.4, 1.4, 3.2, 5.6, 0, 0.12, 0xc8a878, 1);
+    box(g, -0.9, -0.7, 3.6, 5.0, 0.14, 0.26, 0x8a5a36, 1);
+    box(g, -1.2, -0.4, 5.0, 5.3, 0.14, 0.28, 0x8c8c96, 1);
+    box(g, 0.4, 0.6, 3.5, 5.2, 0.14, 0.26, 0xa0a0a8, 1);
+  } }],
+  gemini: [{ build: g => {
+    box(g, -1.5, 1.5, 4, 6.4, 0, 0.12, 0x1e2a44, 1);
+    for (const [sx, sy] of [[-0.9, 5.6], [0.4, 4.6], [0.9, 5.9], [-0.3, 5.0]])
+      box(g, sx - 0.12, sx + 0.12, sy - 0.12, sy + 0.12, 0.12, 0.16, 0, 1, { material: glowStatic(0xffe680) });
+  } }],
+};
+
+{
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const pick = (x, z) => {
+    const w = ANCHORS.map(a => Math.exp(-((x - a.x) ** 2 + (z - a.z) ** 2) / (2 * 11 ** 2)));
+    let r = rand() * w.reduce((s, v) => s + v, 0);
+    for (let i = 0; i < w.length; i++) if ((r -= w[i]) <= 0) return ANCHORS[i].key;
+    return ANCHORS[ANCHORS.length - 1].key;
+  };
+  const near = (x, z) => Math.min(...ANCHORS.map(a => Math.hypot(x - a.x, z - a.z)));
+  // Floor props: along the walls, and in a ring around each desk.
+  for (let x = -37.5; x <= 37.5; x += 2.5) for (let z = -35.5; z <= 23.5; z += 2.5) {
+    // Props hug the walls, or ring the desks closely; the open floor stays open.
+    const byWall = x < -35 || x > 35 || z < -33, ring = near(x, z) > 7.5 && near(x, z) < 10.5;
+    if (!byWall && !ring) continue;
+    if (rand() < 0.3 || !isFree(x - 1.1, z - 1.1, x + 1.1, z + 1.1)) continue;
+    const key = pick(x, z), list = PROPS[key];
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = Math.round(Math.atan2(-x, -5 - z) / (Math.PI / 2)) * (Math.PI / 2);  // face the room
+    world.add(g);
+    list[Math.floor(rand() * list.length)](g);
+    markRect(x - 1.1, z - 1.1, x + 1.1, z + 1.1);
+  }
+  // Wall props, on the back wall and both knee walls.
+  const slots = [
+    ...[-34.5, 34.5].map(x => ({ x, z: -37.9, rot: 0 })),
+    ...[-35, -12].map(z => ({ x: -39.95, z, rot: Math.PI / 2 })),
+    ...[-34, -30, -12, 9, 22].map(z => ({ x: 39.95, z, rot: -Math.PI / 2 })),
+  ];
+  for (const s of slots) {
+    const inward = P(s.x + Math.sin(s.rot) * 1.5, s.z + Math.cos(s.rot) * 1.5);
+    const key = pick(inward.x, inward.z);
+    const floorFree = isFree(inward.x - 1.6, inward.z - 1.6, inward.x + 1.6, inward.z + 1.6);
+    const item = WALL_PROPS[key].find(i => !i.stand || floorFree);
+    if (!item) continue;
+    const g = new THREE.Group();
+    g.position.set(s.x, 0, s.z);
+    g.rotation.y = s.rot;
+    world.add(g);
+    item.build(g);
+    if (item.stand) markRect(inward.x - 1.6, inward.z - 1.6, inward.x + 1.6, inward.z + 1.6);
+  }
+}
+
+// ------------------------------------------------------------- merge
+
+// Thousands of boxes become a couple of meshes: everything static with a
+// shared plain material is baked into one geometry with vertex colors.
+function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  const lit = [], bright = [], done = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    for (let p = o; p; p = p.parent) if (p.userData.keep) return;
+    const isLit = plainMats.has(o.material), isBright = [...glows.values()].includes(o.material);
+    if (!isLit && !isBright) return;
+    const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    if (o.matrixWorld.determinant() < 0) {  // mirrored: flip the triangles back
+      const idx = g.index.array;
+      for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
+    }
+    const c = o.material.color, n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    (isLit ? lit : bright).push(g);
+    done.push(o);
+  });
+  for (const o of done) o.parent.remove(o);
+  if (lit.length) {
+    const m = new THREE.Mesh(mergeGeometries(lit), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    m.castShadow = m.receiveShadow = true;
+    scene.add(m);
+  }
+  if (bright.length) scene.add(new THREE.Mesh(mergeGeometries(bright), new THREE.MeshBasicMaterial({ vertexColors: true })));
+}
+mergeStatic(world);
+
+// ------------------------------------------------------------- clawd
+
+// Voxel Clawd, facing +z. Body x -6..6, y 2..9, z -3.5..3.5; legs below.
+function makeClawd(role) {
+  const o = role ? ROLES[role] : null;
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  const hat = o ? new THREE.Color(o.hat).getHex() : 0;
+  const color = o ? new THREE.Color(o.color).getHex() : 0;
+  const kind = o ? o.outfit : null;
+
+  box(body, -6, 6, 2, 9, -3.5, 3.5, ORANGE);
+  const legs = [-6, -4, 3, 5].map(x => box(root, x, x + 1, 0, 2, -2.5, 2.5, ORANGE));
+
+  const eyes = new THREE.Group();
+  body.add(eyes);
+  const ez = kind === 'coat' ? 4.05 : 3.5;
+  box(eyes, -4, -3, 6, 8, ez, ez + 0.2, EYE);
+  box(eyes, 3, 4, 6, 8, ez, ez + 0.2, EYE);
+
+  const sleeve = kind === 'coat' ? WHITE : ORANGE;
+  const arm = side => {
+    const p = new THREE.Group();
+    p.position.set(side * 6 * V, 5 * V, 0);
+    body.add(p);
+    if (side < 0) box(p, -2, 0, -1, 0, -1, 1, sleeve);
+    else box(p, 0, 2, -1, 0, -1, 1, sleeve);
+    return p;
+  };
+  const armL = arm(-1), armR = arm(1);
+
+  if (kind === 'hat') {
+    if (o.brim && role === 'planificador') {  // hard hat with a ridge
+      box(body, -5, 5, 9, 11.5, -3, 3, hat);
+      box(body, -1, 1, 11.5, 12, -3.2, 3.2, hat);
+      box(body, -6.5, 6.5, 9, 9.6, -4, 5.5, hat);
+    } else {  // safari hat with a dark band
+      box(body, -5, 5, 9, 11, -3, 3, hat);
+      box(body, -5.1, 5.1, 9.6, 10.2, -3.1, 3.1, 0x6b5432);
+      box(body, -7.5, 7.5, 9, 9.5, -4.5, 4.5, hat);
+    }
+  } else if (kind === 'glasses') {
+    const lens = mat(GLASS, { transparent: true, opacity: 0.55 });
+    for (const lx of [-5, 2]) {
+      box(body, lx, lx + 3, 5, 8, 3.5, 3.9, 0, V, { material: lens });
+      box(body, lx - 0.15, lx + 3.15, 7.85, 8.15, 3.5, 3.95, 0x55555c);
+      box(body, lx - 0.15, lx + 3.15, 4.85, 5.15, 3.5, 3.95, 0x55555c);
+    }
+    box(body, -2, 2, 7, 7.4, 3.6, 3.9, 0x7896b4);
+    box(body, -6.2, -6, 7, 7.4, -3, 3.6, 0x55555c);
+    box(body, 6, 6.2, 7, 7.4, -3, 3.6, 0x55555c);
+  } else if (kind === 'guard') {
+    box(body, -6.2, 6.2, 8.4, 10.4, -3.7, 3.7, hat);
+    box(body, -5, 5, 8.4, 8.9, 3.7, 6, hat);
+    box(body, -1, 1, 9, 10, 3.7, 3.8, GOLD);  // cap badge
+    for (const lx of [-5, 2]) box(body, lx, lx + 3, 6, 7.6, 3.5, 3.9, 0x111114);
+    box(body, -2, 2, 7, 7.4, 3.5, 3.85, 0x111114);
+    box(body, -1, 1, 3.5, 5.2, 3.5, 3.8, GOLD);  // chest badge
+  } else if (kind === 'coat') {
+    box(body, -6.2, 6.2, 2, 5.5, -3.7, 3.7, WHITE);
+    box(body, -0.3, 0.3, 2, 5.5, 3.7, 3.8, 0xcfcfcf);
+    box(body, -6.15, 6.15, 6.6, 7.4, -3.65, 3.65, 0x2e6e3e);
+    const lens = mat(0x78dc8c, { transparent: true, opacity: 0.6 });
+    for (const lx of [-5, 2]) box(body, lx, lx + 3, 5.6, 8.4, 3.5, 4.1, 0, V, { material: lens });
+  } else if (kind === 'band') {
+    box(body, -6.15, 6.15, 7.8, 8.8, -3.65, 3.65, hat);
+    box(body, 6, 7.4, 7.6, 9, -2.8, -1.6, hat);
+    box(body, 7, 8.2, 6.6, 7.6, -2.6, -1.8, hat);
+  } else if (!role) {  // the lead wears a little crown
+    box(body, -4, 4, 9, 9.8, -2, 2, GOLD);
+    for (const cx of [-4, -0.5, 3]) box(body, cx, cx + 1, 9.8, 11, -0.5, 0.5, GOLD);
+  }
+
+  return { root, body, eyes, armL, armR, legs, color };
+}
+
+// Gemini: a floating four-pointed star, blue to purple, with a little face.
+function makeGemini() {
+  const root = new THREE.Group(), body = new THREE.Group();
+  const star = new THREE.Group(), eyes = new THREE.Group();
+  root.add(body);
+  body.add(star, eyes);
+  const glowing = c => new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: 0.25 });
+  const blue = glowing(0x4285f4), mid = glowing(0x7b8cf0), purple = glowing(0x9b72cb), core = glowing(0xa8c7fa);
+  box(star, -1.5, 1.5, -1.5, 1.5, -0.8, 0.8, 0, V, { material: core });
+  const tiers = [[1.0, 1.5, 2.8, 0.7], [0.6, 2.8, 3.9, 0.5], [0.25, 3.9, 4.8, 0.3]];
+  for (const [dx, dy, m] of [[0, 1, blue], [0, -1, purple], [1, 0, mid], [-1, 0, mid]]) {
+    for (const [hw, a0, a1, hz] of tiers) {
+      const lo = dx + dy > 0 ? a0 : -a1, hi = dx + dy > 0 ? a1 : -a0;
+      if (dx === 0) box(star, -hw, hw, lo, hi, -hz, hz, 0, V, { material: m });
+      else box(star, lo, hi, -hw, hw, -hz, hz, 0, V, { material: m });
+    }
+  }
+  box(eyes, -0.9, -0.4, -0.1, 0.9, 0.8, 1.0, EYE);
+  box(eyes, 0.4, 0.9, -0.1, 0.9, 0.8, 1.0, EYE);
+  box(eyes, -1.4, -0.9, -0.7, -0.4, 0.8, 0.95, 0xf4a3c0);
+  box(eyes, 0.9, 1.4, -0.7, -0.4, 0.8, 0.95, 0xf4a3c0);
+  return { root, body, star, eyes, armL: new THREE.Group(), armR: new THREE.Group(), legs: [],
+    color: 0x8ab4f8, starMats: [blue, mid, purple, core] };
+}
+
+// ------------------------------------------------------------- agents
+
+const agents = new Map();   // agent id -> agent
+const retired = new Set();  // stopped agent ids, so late hooks don't revive them
+const fx = [];              // sparkles, envelopes, bubbles in flight
+let main = null;
+
+function tagEl() {
+  const el = document.createElement('div');
+  el.className = 'tag';
+  el.innerHTML = '<div class="nm"></div><div class="act"></div>';
+  return el;
+}
+
+function setTag(a) {
+  if (a.act !== a.shownAct) { a.shownAct = a.act; a.actAt = now(); }
+  const nm = a.tagEl.firstChild, act = a.tagEl.lastChild;
+  const o = info(a);
+  let title = '👑 Claude';
+  if (a.kind === 'gemini') title = GEM.icon + ' Gemini' + (a.proj ? ' · ' + a.proj : '');
+  else if (o) title = o.icon + ' ' + ((a.name || a.nick) ? (a.name || a.nick) + ' · ' + o.name : o.name);
+  nm.textContent = title;
+  nm.style.color = o ? o.color : '#f0be3c';
+  const label = LABELS[a.act] || a.act || '';
+  act.textContent = [ACT_ICON[a.act] || '', label, a.detail ? '· ' + a.detail : '']
+    .filter(Boolean).join(' ');
+}
+
+// Subagents Claude didn't name still get a person's name for the office,
+// picked from their role's list and never shared with a colleague in the room.
+const NICKS = {
+  explorador: ['vale', 'nico', 'ines', 'joel'], planificador: ['pablo', 'ana', 'tomas', 'irene'],
+  revisor: ['sofia', 'diego', 'clara', 'raul'], seguridad: ['bruno', 'elena', 'hugo', 'marta'],
+  'guia-tdd': ['lucia', 'marco', 'paula', 'iker'], ayudante: ['mateo', 'rosa', 'leo', 'alba'],
+};
+function nickFor(role, id) {
+  const list = NICKS[role] || NICKS.ayudante;
+  const taken = new Set([...agents.values()].map(a => a.name || a.nick));
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  for (let k = 0; k < list.length; k++) {
+    const n = list[(h + k) % list.length];
+    if (!taken.has(n)) return n;
+  }
+  return list[h % list.length] + ' ' + (h % 9 + 2);
+}
+
+function createAgent(id, role, name, seat, instant, proj) {
+  const gem = role === 'gemini';
+  const c = gem ? makeGemini() : makeClawd(role);
+  const a = { id, role: gem ? null : role, kind: gem ? 'gemini' : 'clawd', name, seat, proj,
+    act: role ? 'thinking' : 'idle', detail: '', ...c, hop: -10, spinY: -10, seen: Date.now() / 1000,
+    walk: null, seated: false, leaveAt: null, leaving: false, heading: 0, spin: 0 };
+  if (!gem && role && !name) a.nick = nickFor(role, id);
+  seat.agent = a;
+  scene.add(a.root);
+  a.tagEl = tagEl();
+  const tag = new CSS2DObject(a.tagEl);
+  tag.position.set(0, (gem ? 12.5 : role ? 13 : 13.5) * V, 0);
+  a.root.add(tag);
+  a.tag = tag;
+  if (instant || !seat.path.length) {
+    a.root.position.copy(seat.seatPos);
+    a.root.rotation.y = gem ? 0 : seat.face || 0;
+    a.seated = true;
+  } else {
+    a.root.position.copy(seat.path[0]);
+    a.walk = { pts: seat.path.slice(1), i: 0, dir: 'in' };
+    poof(IN, a.color || ORANGE, 8);
+  }
+  if (seat.desk) seat.desk.logoMat.color.set(a.color || GOLD);
+  setTag(a);
+  agents.set(id, a);
+  showGemini();
+  return a;
+}
+
+function ensureMain() {
+  if (!main) main = createAgent('main', null, 'Claude', leadSeat, true);
+  return main;
+}
+
+function ensureAgent(e, instant) {
+  if (e.agent === 'main' || !e.agent) return ensureMain();
+  if (agents.has(e.agent)) return agents.get(e.agent);
+  if (e.ev === 'spawn') retired.delete(e.agent);  // a new arrival always counts
+  if (retired.has(e.agent)) return null;
+  if (e.src === 'gemini') return createAgent(e.agent, 'gemini', null, pickSeat('gemini'), instant, e.proj);
+  if (!(e.type || e.name)) return null;  // internal helpers have no type
+  const role = e.type ? roleFor(e.type) : 'ayudante';
+  return createAgent(e.agent, role, e.name, pickSeat(role), instant);
+}
+
+function freeSeat(a) {
+  if (a.seat.agent !== a) return;
+  a.seat.agent = null;
+  if (a.seat.desk) a.seat.desk.logoMat.color.set(0x555560);
+}
+
+function removeAgent(a) {
+  scene.remove(a.root);
+  a.tag.element.remove();
+  freeSeat(a);
+  agents.delete(a.id);
+  showGemini();
+}
+
+// Walk back out the way it came in, from wherever it is now.
+function startLeave(a) {
+  a.leaveAt = null;
+  a.leaving = true;
+  freeSeat(a);
+  const path = a.seat.path;
+  const back = a.walk && a.walk.dir === 'in' ? path.slice(0, a.walk.i + 1) : path.slice(0, -1);
+  a.walk = { pts: back.reverse(), i: 0, dir: 'out' };
+  a.seated = false;
+}
+
+function reset() {
+  for (const a of [...agents.values()]) removeAgent(a);
+  main = null;
+  retired.clear();
+  tasks.clear();
+  for (const f of fx.splice(0)) f.dispose();
+  feedRows.textContent = '';
+  renderTasks();
+  ensureMain();
+}
+
+function byName(name) {
+  if (!name) return null;
+  const n = String(name).toLowerCase();
+  if (['main', 'lead', 'team-lead', 'leader', 'claude', 'parent'].includes(n)) return ensureMain();
+  for (const a of agents.values()) {
+    if (a.id === name || (a.name || '').toLowerCase() === n) return a;
+  }
+  for (const a of agents.values()) if (a.role === roleFor(n) && ROLES[n.split(':').pop()]) return a;
+  return null;
+}
+
+const gemEl = document.getElementById('gem');
+function showGemini() {
+  const g = [...agents.values()].find(a => a.kind === 'gemini');
+  gemEl.style.display = g ? 'block' : 'none';
+  gemEl.textContent = g ? '✦ Gemini' + (g.proj ? ' · ' + g.proj : '') : '';
+}
+
+// ------------------------------------------------------------- effects
+
+const clock = new THREE.Clock();
+const now = () => clock.getElapsedTime();
+
+function poof(pos, color, n = 18) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({
+      color: i % 3 ? 0xffe680 : color, transparent: true }));
+    m.scale.setScalar(0.22);
+    m.position.set(pos.x, 1.6, pos.z);
+    const v = new THREE.Vector3((Math.random() - .5) * 6, Math.random() * 5 + 2, (Math.random() - .5) * 6);
+    scene.add(m);
+    const t0 = now();
+    fx.push({
+      step(t) {
+        const k = (t - t0) / 0.9;
+        m.position.addScaledVector(v, 1 / 60);
+        v.y -= 0.25;
+        m.material.opacity = 1 - k;
+        return k < 1;
+      },
+      dispose() { scene.remove(m); m.material.dispose(); },
+    });
+  }
+}
+
+const envGeo = new THREE.BoxGeometry(1, 0.08, 0.66);
+function envelope(from, to, text) {
+  const g = new THREE.Group();
+  const m = new THREE.Mesh(envGeo, mat(0xfffaf0));
+  m.castShadow = true;
+  g.add(m);
+  box(g, -0.12, 0.12, 0.04, 0.09, -0.12, 0.12, 0xd9363e, 1);
+  g.scale.setScalar(1.4);
+  scene.add(g);
+  const a = from.root.position.clone().setY(3.4);
+  const b = to === main ? TRAY.clone() : to.root.position.clone().setY(3.4);
+  from.flashAt = now();
+  const dur = Math.max(1.0, a.distanceTo(b) / 14);
+  const t0 = now();
+  from.hop = t0;
+  fx.push({
+    step(t) {
+      const k = Math.min(1, (t - t0) / dur);
+      g.position.lerpVectors(a, b, k);
+      g.position.y += Math.sin(Math.PI * k) * (3 + a.distanceTo(b) * 0.15);
+      g.rotation.y = t * 6;
+      g.rotation.z = Math.sin(t * 9) * 0.3;
+      if (k >= 1) {
+        to.hop = t;
+        if (text) bubble(to, '📨 ' + text);
+        if (to === main) trayLetter();
+        return false;
+      }
+      return true;
+    },
+    dispose() { scene.remove(g); },
+  });
+}
+
+// A letter resting in Claude's tray for a while.
+const trayLetters = [];
+function trayLetter() {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(envGeo, mat(0xfffaf0)));
+  box(g, -0.12, 0.12, 0.04, 0.09, -0.12, 0.12, 0xd9363e, 1);
+  g.position.copy(TRAY).setY(TRAY.y + trayLetters.length * 0.1);
+  g.rotation.y = (Math.random() - 0.5) * 0.5;
+  scene.add(g);
+  trayLetters.push(g);
+  const t0 = now();
+  fx.push({
+    step(t) { return t - t0 < 10; },
+    dispose() { scene.remove(g); trayLetters.splice(trayLetters.indexOf(g), 1); },
+  });
+}
+
+function bubble(a, text, secs = 4) {
+  const el = document.createElement('div');
+  el.className = 'bubble';
+  el.textContent = text;
+  const obj = new CSS2DObject(el);
+  obj.position.set(0, 17 * V, 0);
+  a.root.add(obj);
+  const t0 = now();
+  fx.push({
+    step(t) { return t - t0 < secs && agents.get(a.id) === a; },
+    dispose() { a.root.remove(obj); el.remove(); },
+  });
+}
+
+// ------------------------------------------------------------- tasks & feed
+
+const tasks = new Map();
+const taskList = document.getElementById('tasklist');
+function renderTasks() {
+  taskList.textContent = '';
+  if (!tasks.size) {
+    taskList.innerHTML = '<li class="empty">no tasks</li>';
+    return;
+  }
+  for (const t of tasks.values()) {
+    const li = document.createElement('li');
+    li.className = t.done ? 'done' : '';
+    li.textContent = (t.done ? '✓ ' : '□ ') + (t.subject || t.id) + (t.who ? ' — ' + t.who : '');
+    taskList.appendChild(li);
+  }
+}
+
+const feedRows = document.getElementById('feedrows');
+function feed(e, a, text) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const time = document.createElement('span');
+  time.className = 'time';
+  time.textContent = new Date(e.t * 1000).toLocaleTimeString('en-GB');
+  const who = document.createElement('span');
+  const o = info(a);
+  who.style.color = o ? o.color : '#f0be3c';
+  who.textContent = a ? (a.kind === 'gemini' ? 'Gemini' : a.name || a.nick || (o ? o.name : 'Claude')) : '?';
+  row.append(time, who, document.createTextNode(' ' + text));
+  feedRows.prepend(row);
+  while (feedRows.children.length > 7) feedRows.lastChild.remove();
+}
+
+// ------------------------------------------------------------- events
+
+let project = '';
+function apply(e, instant) {
+  const gem = e.src === 'gemini';
+  if (!gem && e.proj && e.proj !== project) {
+    project = e.proj;
+    showSession();
+  }
+  const a = ['task', 'task-done', 'idle'].includes(e.ev)
+    ? (e.agent && e.agent !== 'main' ? ensureAgent(e, instant) : byName(e.name) || ensureMain())
+    : ensureAgent(e, instant);
+  if (a) a.seen = e.t;
+  // Gemini stays while its conversation is alive; a new step cancels its exit.
+  if (a && gem && !a.leaving && !(e.ev === 'state' && e.state === 'done')) a.leaveAt = null;
+
+  switch (e.ev) {
+    case 'spawn':
+      if (!a) return;
+      if (e.name) a.name = e.name;
+      a.act = 'thinking';
+      a.detail = e.desc || '';
+      setTag(a);
+      if (!instant) feed(e, a, (gem ? 'opens a conversation' : 'arrives at the office') + (e.desc ? ': ' + e.desc : ''));
+      if (!gem) {
+        ensureMain().act = 'delegating';
+        setTag(main);
+      }
+      break;
+    case 'stop':
+      if (!a || a === main) return;
+      retired.add(a.id);
+      if (instant) { removeAgent(a); return; }
+      a.act = 'done';
+      a.detail = '';
+      setTag(a);
+      envelope(a, ensureMain(), e.report);
+      a.leaveAt = now() + (a.seated ? 1.8 : 0);
+      feed(e, a, 'is done and hands in the report');
+      break;
+    case 'tool':
+      if (!a) return;
+      a.act = e.activity || 'working';
+      a.detail = e.detail || e.tool || '';
+      setTag(a);
+      if (!instant && a !== main) feed(e, a, (ACT_ICON[a.act] || '') + ' ' + e.tool + (e.detail ? ' ' + e.detail : ''));
+      break;
+    case 'state':
+      if (!a) return;
+      if (a === main && e.state === 'start' && ['startup', 'clear'].includes(e.source)) {
+        for (const b of [...agents.values()]) if (b !== main && b.kind !== 'gemini') removeAgent(b);
+        retired.clear();
+        tasks.clear();
+        renderTasks();
+      }
+      a.act = e.state === 'start' ? 'idle' : e.state;
+      if (a.act !== 'thinking' || a === main) a.detail = '';
+      setTag(a);
+      if (gem && e.state === 'done') {
+        a.spinY = now();
+        if (!a.leaving) a.leaveAt = now() + GEMINI_STAYS;
+        if (!instant) feed(e, a, 'finished a turn');
+      }
+      break;
+    case 'msg': {
+      if (!a) return;
+      const targets = e.to === '*' ? [...agents.values()].filter(b => b !== a)
+        : [byName(e.to) || ensureMain()];
+      if (!instant) for (const b of targets) if (b !== a) envelope(a, b, e.summary);
+      if (!instant) feed(e, a, '✉️ → ' + (e.to || 'Claude') + (e.summary ? ': ' + e.summary : ''));
+      break;
+    }
+    case 'task':
+      tasks.set(e.id, { id: e.id, subject: e.subject, who: e.name, done: false });
+      renderTasks();
+      if (!instant && a) { a.hop = now(); bubble(a, '📝 ' + (e.subject || 'new task'), 3); }
+      break;
+    case 'task-done': {
+      const t = tasks.get(e.id) || { id: e.id, subject: e.subject, who: e.name };
+      t.done = true;
+      tasks.set(e.id, t);
+      renderTasks();
+      if (!instant && a) { a.hop = now(); bubble(a, '✅ ' + (e.subject || 'task done'), 3); }
+      break;
+    }
+    case 'idle':
+      if (!a) return;
+      a.act = 'sleeping';
+      a.detail = '';
+      setTag(a);
+      break;
+    case 'end':
+      for (const b of [...agents.values()]) if (b !== main && b.kind !== 'gemini') removeAgent(b);
+      ensureMain().act = 'sleeping';
+      setTag(main);
+      break;
+  }
+}
+
+// ------------------------------------------------------------- animation
+
+// Move along the walk path. Returns true when the agent left the office.
+function stepWalk(a, dt) {
+  const w = a.walk, p = a.root.position;
+  let step = WALK * dt;
+  while (step > 0 && w.i < w.pts.length) {
+    const target = w.pts[w.i];
+    const dx = target.x - p.x, dz = target.z - p.z, d = Math.hypot(dx, dz);
+    if (d <= step) {
+      p.x = target.x; p.z = target.z; step -= d; w.i++;
+    } else {
+      p.x += dx / d * step; p.z += dz / d * step; step = 0;
+      a.heading = Math.atan2(dx, dz);
+    }
+  }
+  if (w.i < w.pts.length) return false;
+  a.walk = null;
+  if (w.dir === 'out') { removeAgent(a); return true; }
+  a.seated = true;
+  return false;
+}
+
+const turn = (from, to) => from + Math.atan2(Math.sin(to - from), Math.cos(to - from));
+
+function animate(a, t, dt) {
+  if (a.leaveAt !== null && t >= a.leaveAt && !a.leaving) startLeave(a);
+  if (a.walk && stepWalk(a, dt)) return;
+  const walking = !!a.walk;
+
+  // Shrink while slipping out through the door.
+  let s = 1;
+  if (a.leaving && walking) s = Math.min(1, a.root.position.distanceTo(OUT) / 4);
+  a.root.scale.setScalar(Math.max(0.01, s));
+
+  // Like the status line: the lead's "done" fades to idle, then to sleep.
+  if (a === main && ((a.act === 'done' && t - a.actAt > 6) || (a.act === 'idle' && t - a.actAt > 180))) {
+    a.act = a.act === 'done' ? 'idle' : 'sleeping';
+    setTag(a);
+  }
+  // Clawds turn to where they walk; the star always faces the room.
+  const k = Math.min(1, dt * 10), heading = a.kind === 'gemini' ? 0 : walking ? a.heading : a.seat.face || 0;
+  a.root.rotation.y += (turn(a.root.rotation.y, heading) - a.root.rotation.y) * k;
+
+  if (a.kind === 'gemini') animateGemini(a, t, dt, walking);
+  else animateClawd(a, t, walking);
+
+  // The desk follows its agent: lid open, screen, glow and rug by activity.
+  const d = a.seat.desk;
+  if (!d || !a.seated || a.seat.agent !== a) return;
+  const act = a.act;
+  d.open += ((act === 'sleeping' ? 0.4 : 1) - d.open) * 0.1;
+  let c = SCREEN[act] ?? SCREEN.working;
+  if (act === 'running' && Math.sin(t * 10) > 0.6) c = 0xffffff;
+  d.screenMat.color.setHex(c);
+  d.glow.color.setHex(c);
+  d.glow.intensity = act === 'sleeping' ? 0.2 : act === 'typing' ? 2.4 + Math.sin(t * 20) * 0.6 : 2;
+}
+
+function animateClawd(a, t, walking) {
+  const act = a.act;
+  let y = 0, ry = 0, la = 0, ra = 0, ex = 0, ey = 0, blink = 1;
+  const lift = [0, 0, 0, 0];
+  if (walking) {
+    const ph = Math.sin(t * 11);
+    y = Math.abs(ph) * 0.14;
+    la = ph * 0.35; ra = ph * 0.35;
+    lift[0] = lift[3] = Math.max(0, ph) * 0.35;
+    lift[1] = lift[2] = Math.max(0, -ph) * 0.35;
+  } else if (act === 'thinking' || act === 'compacting') {
+    y = Math.sin(t * 2) * 0.06; ey = 0.5 * V; ex = Math.round(Math.sin(t * 1.3)) * V;
+  } else if (act === 'reading') {
+    ex = Math.round(Math.sin(t * 2.5)) * V; ry = Math.sin(t * 1.2) * 0.12;
+  } else if (act === 'typing') {
+    la = Math.sin(t * 22) * 0.35 + 0.5; ra = -Math.sin(t * 22 + 1.5) * 0.35 - 0.5; ey = -0.5 * V;
+  } else if (act === 'running') {
+    y = Math.abs(Math.sin(t * 8)) * 0.1; ey = -0.5 * V; la = 0.4; ra = -0.4;
+  } else if (act === 'delegating') {
+    la = -0.6 + Math.sin(t * 4) * 0.4; ry = Math.sin(t * 0.8) * 0.4;
+  } else if (act === 'asking') {
+    ra = 1.2 + Math.sin(t * 8) * 0.4;
+  } else if (act === 'done') {
+    y = Math.abs(Math.sin(t * 7)) * 0.7; la = -1.2; ra = 1.2;
+  } else if (act === 'sleeping') {
+    blink = 0.15; y = -0.08 + Math.sin(t * 1.2) * 0.04;
+  } else if (act === 'working') {
+    la = -Math.abs(Math.sin(t * 6)) * 0.9; ry = Math.sin(t * 3) * 0.05;
+  }
+  if (act !== 'sleeping' && (t % 4.3) < 0.12) blink = 0.15;
+  const hop = t - a.hop;
+  if (hop < 0.5) y += Math.sin(Math.PI * hop / 0.5) * 0.9;
+
+  a.body.position.y = y;
+  a.body.rotation.y = ry;
+  a.armL.rotation.z = la;
+  a.armR.rotation.z = ra;
+  a.eyes.position.set(ex, ey, 0);
+  a.eyes.scale.y = blink;
+  a.legs.forEach((l, i) => { l.position.y = V + lift[i]; });
+}
+
+function animateGemini(a, t, dt, walking) {
+  const act = a.act;
+  const speed = walking ? 1.5 : act === 'typing' || act === 'running' ? 2.6 : act === 'thinking' ? 0.9 : 0.4;
+  a.spin += dt * speed;
+  a.star.rotation.z = a.spin;
+  let y = 2.9 + Math.sin(t * 1.8) * 0.25;
+  const hop = t - a.hop;
+  if (hop < 0.5) y += Math.sin(Math.PI * hop / 0.5) * 0.9;
+  a.body.position.y = y;
+  const flip = t - a.spinY;  // a full turn when a turn finishes
+  a.body.rotation.y = flip < 1 ? flip * Math.PI * 2 : 0;
+  const glow = act === 'thinking' ? 0.45 + 0.25 * Math.sin(t * 4) : walking ? 0.3 : 0.25;
+  for (const m of a.starMats) m.emissiveIntensity = glow;
+  a.eyes.position.x = act === 'reading' ? Math.round(Math.sin(t * 2.5)) * 0.15 : 0;
+  a.eyes.scale.y = (t % 3.7) < 0.12 ? 0.15 : 1;
+}
+
+const WHITE_C = new THREE.Color(0xffffff), DIM_C = new THREE.Color(0x2a2a30);
+
+// Double-click an agent to fly the camera over to it.
+let focus = null;
+{
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  renderer.domElement.addEventListener('dblclick', ev => {
+    const r = renderer.domElement.getBoundingClientRect();
+    ndc.set((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const list = [...agents.values()];
+    const hit = ray.intersectObjects(list.map(a => a.root), true)[0];
+    if (!hit) return;
+    const a = list.find(b => { for (let p = hit.object; p; p = p.parent) if (p === b.root) return true; return false; });
+    const to = a.root.position.clone().setY(2);
+    const offset = camera.position.clone().sub(controls.target).setLength(24);
+    focus = { t0: now(), fromT: controls.target.clone(), toT: to,
+      fromC: camera.position.clone(), toC: to.clone().add(offset) };
+  });
+}
+
+let last = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  // Background tabs get few frames: take bigger steps so agents keep up.
+  const t = now(), dt = Math.min(0.25, t - last);
+  last = t;
+  for (const a of [...agents.values()]) animate(a, t, dt);
+  for (const seat of allSeats) {
+    const a = seat.agent, here = a && a.seated && !a.leaving;
+    if (seat.rugMat) seat.rugMat.emissiveIntensity += ((here ? 0.22 : 0) - seat.rugMat.emissiveIntensity) * 0.08;
+    const d = seat.desk;
+    if (!d) continue;
+    // Open and tilted back when someone sits there, shut when the desk is free.
+    const target = here ? -Math.PI / 2 + (Math.PI / 2 + 0.3) * d.open : -Math.PI / 2 + 0.03;
+    d.hinge.rotation.x += (target - d.hinge.rotation.x) * 0.12;
+    if (!here) { d.glow.intensity = 0; d.screenMat.color.setHex(SCREEN.sleeping); d.open = 0; }
+  }
+  for (const f of decorAnim) f(t);
+  // The team board: each role's light is on while one of its agents works,
+  // and flickers when that agent sends a message.
+  for (const [key, l] of Object.entries(boardLamps)) {
+    const a = [...agents.values()].find(b => !b.leaving && (key === 'gemini' ? b.kind === 'gemini' : b.role === key));
+    const flash = a && t - (a.flashAt ?? -10) < 0.8 && Math.sin(t * 30) > 0;
+    l.mat.color.copy(flash ? WHITE_C : a ? l.color : DIM_C);
+  }
+  // Beams and hanging plants fade away as the camera comes close.
+  const dist = camera.position.distanceTo(controls.target);
+  const fade = THREE.MathUtils.clamp((dist - 30) / 45, 0.06, 0.9);
+  for (const m of fadeMats) { m.opacity = fade; m.depthWrite = fade > 0.98; }
+  roof.visible = fade > 0.07;
+  if (focus) {
+    const k = Math.min(1, (t - focus.t0) / 0.7), e = 1 - Math.pow(1 - k, 3);
+    controls.target.lerpVectors(focus.fromT, focus.toT, e);
+    camera.position.lerpVectors(focus.fromC, focus.toC, e);
+    if (k >= 1) focus = null;
+  }
+  // The door swings open while someone walks through it.
+  const near = [...agents.values()].some(a => a.walk && a.root.position.distanceTo(IN) < 7);
+  door.open += ((near ? 1 : 0) - door.open) * 0.12;
+  door.rotation.y = door.open * 1.5;
+  for (let i = fx.length - 1; i >= 0; i--) {
+    if (!fx[i].step(t)) { fx[i].dispose(); fx.splice(i, 1); }
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  labels.render(scene, camera);
+}
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h);
+  labels.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+ensureMain();
+frame();
+
+// ------------------------------------------------------------- live log
+
+const dot = document.getElementById('dot');
+const sess = document.getElementById('sess');
+let session = null;
+function showSession() {
+  if (!session) { sess.textContent = 'waiting for a Claude Code session…'; return; }
+  sess.textContent = (project ? project + ' · ' : '') + 'session ' + session.sid.slice(0, 8) +
+    (session.pinned ? '' : ' (latest)');
+}
+
+const sid = new URLSearchParams(location.search).get('s') || '';
+const src = new EventSource('/events' + (sid ? '?s=' + encodeURIComponent(sid) : ''));
+src.onopen = () => dot.classList.add('on');
+src.onerror = () => dot.classList.remove('on');
+src.addEventListener('session', m => {
+  const s = JSON.parse(m.data);
+  session = s.sid ? s : null;
+  project = '';
+  reset();
+  showSession();
+});
+src.addEventListener('replay', m => {
+  const list = JSON.parse(m.data);
+  // Skip agents that are already gone before replaying, so they never take a
+  // desk: ones that never reported back in two hours, and Gemini once its
+  // last turn is older than GEMINI_STAYS.
+  const lastOf = {};
+  for (const e of list) lastOf[e.agent] = e;
+  const end = list.length ? list[list.length - 1].t : 0, wall = Date.now() / 1000;
+  const gone = id => {
+    const e = lastOf[id];
+    if (!e || id === 'main') return false;
+    if (e.src !== 'gemini') return end - e.t > 7200;
+    return e.ev === 'state' && e.state === 'done' ? wall - e.t > GEMINI_STAYS : wall - e.t > 7200;
+  };
+  for (const e of list) if (!gone(e.agent)) apply(e, true);
+  for (const a of agents.values()) {
+    if (a.kind === 'gemini' && a.act === 'done') a.leaveAt = now() + GEMINI_STAYS - (wall - a.seen);
+  }
+  for (const e of list.slice(-6)) {
+    // Agents that already left still get their name and color from the event.
+    const a = e.agent === 'main' ? main : agents.get(e.agent) ||
+      (e.src === 'gemini' ? { kind: 'gemini' } : e.role && { role: e.role, name: e.name });
+    if (e.ev === 'tool' || e.ev === 'msg' || e.ev === 'spawn') feed(e, a,
+      e.ev === 'msg' ? '✉️ → ' + (e.to || 'Claude') : e.ev === 'spawn'
+        ? (e.src === 'gemini' ? 'opens a conversation' : 'arrives at the office')
+        : (ACT_ICON[e.activity] || '') + ' ' + e.tool + (e.detail ? ' ' + e.detail : ''));
+  }
+});
+src.onmessage = m => {
+  try { apply(JSON.parse(m.data), false); } catch (err) { console.error(err); }
+};
+</script>
+<script>
+  // The module above never runs if the CDN is unreachable.
+  setTimeout(() => { if (!document.querySelector('#scene canvas'))
+    document.getElementById('err').style.display = 'block'; }, 6000);
+</script>
+</body>
+</html>
