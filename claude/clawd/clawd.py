@@ -26,11 +26,15 @@ are all body are painted with background color only, because glyphs leave
 gaps between lines in terminals with line spacing. A cell can only show two
 colors, so outfits keep eyes away from cells that already have a third one.
 """
-import fcntl
 import json
 import os
 import sys
 import time
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_DIR = os.path.expanduser("~/.claude/clawd/state")
@@ -209,11 +213,35 @@ def events_path(sid):
 
 def load(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             s = json.load(f)
         return s if isinstance(s, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def lock_file(f):
+    """Block until this process holds the lock on the open file f."""
+    if sys.platform == "win32":
+        while True:  # LK_LOCK gives up after 10 tries, so keep trying
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                pass
+    else:
+        fcntl.flock(f, fcntl.LOCK_EX)
+
+
+def replace(tmp, path):
+    """os.replace, retried on Windows while a reader has path open."""
+    for _ in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.01)
+    os.replace(tmp, path)
 
 
 # ---------------------------------------------------------------- hooks
@@ -337,7 +365,7 @@ def event(arg, data, s, now):
 def log_event(sid, e):
     try:  # the office is extra: never let it get in the way of the state
         os.makedirs(EVENTS_DIR, exist_ok=True)
-        with open(events_path(sid), "a") as f:
+        with open(events_path(sid), "a", encoding="utf-8") as f:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
     except (OSError, TypeError, ValueError):
         pass
@@ -415,7 +443,7 @@ def hook(arg):
     # read-modify-write, and replace the file atomically for the readers.
     # The event log is appended under the same lock, so it stays in order.
     with open(path + ".lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock_file(lock)
         s = load(path)
         now = time.time()
         e = event(arg, data, s, now)
@@ -425,7 +453,7 @@ def hook(arg):
         tmp = "%s.%d.tmp" % (path, os.getpid())
         with open(tmp, "w") as f:
             json.dump(s, f)
-        os.replace(tmp, path)
+        replace(tmp, path)
 
 
 def gemini_activity(tool):
@@ -892,7 +920,7 @@ def office_page():
             "hat": hexcolor(o.get("hat") or o["mini"]), "outfit": o["outfit"],
             "brim": bool(o.get("brim")),
         }
-    with open(OFFICE_HTML) as f:
+    with open(OFFICE_HTML, encoding="utf-8") as f:
         page = f.read()
     page = page.replace("/*ROLES*/null", json.dumps(roles, ensure_ascii=False))
     page = page.replace("/*ALIASES*/null", json.dumps(ROLE_ALIASES))
@@ -1078,10 +1106,14 @@ def office(sid):
     port = office_port()
     if not port:
         # Detached, so it outlives the command that started it.
+        flags = 0
+        if sys.platform == "win32":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "office-serve"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
+            stderr=subprocess.DEVNULL, start_new_session=True,
+            creationflags=flags)
         for _ in range(30):
             time.sleep(0.1)
             port = office_port()
@@ -1095,7 +1127,11 @@ def office(sid):
     if sid and not os.path.exists(events_path(sid)):
         sid = ""  # no log yet: follow whichever session moves
     url = "http://127.0.0.1:%d/" % port + ("?s=" + sid if sid else "")
-    subprocess.call(["open", url])
+    if sys.platform == "darwin":
+        subprocess.call(["open", url])
+    else:
+        import webbrowser
+        webbrowser.open(url)
     print("Office open at " + url)
 
 
@@ -1156,6 +1192,11 @@ def demo():
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "statusline"
+    # Windows defaults to the ANSI code page, which can't print Clawd's glyphs,
+    # and to \r\n line ends.
+    for stream in (sys.stdin, sys.stdout):
+        if stream is not None:
+            stream.reconfigure(encoding="utf-8", newline="\n")
     try:
         if mode == "hook":
             hook(sys.argv[2] if len(sys.argv) > 2 else "auto")

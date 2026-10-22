@@ -3,24 +3,27 @@
 Guía para instalar este setup en una PC con Windows. Está escrita para que **Claude Code la
 siga paso a paso**: abre `claude` dentro de esta carpeta y dile *"instala mi setup"*.
 
-## Qué se instala y qué no
+## Qué se instala
 
-| Pieza | ¿En Windows? | Por qué |
-|---|---|---|
-| `claude/agents/*.md`: explorador, planificador, revisor, seguridad, guia-tdd | ✅ Sí | Son texto; funcionan en cualquier sistema |
-| `claude/commands/*.md`: `/planear`, `/explicar`, `/tdd`, `/revisar-codigo`, `/seguridad` | ✅ Sí | Ídem |
-| `claude/commands/office.md` (`/office`) | ❌ No | Llama a `/usr/bin/python3` |
-| `claude/clawd/` (statusline, oficina 3D, `sim-oficina.sh`) | ❌ No | `clawd.py` usa `fcntl` (no existe en Windows), abre el navegador con `open` y el demo es bash |
-| `claude/settings.fragment.json` (hooks, statusline, agent teams) | ❌ No | Todos los comandos apuntan a `/usr/bin/python3 ~/.claude/clawd/...` |
-| `gemini/hooks.json` | ❌ No | Depende de `clawd.py` |
-| `install.sh` | ❌ No | Es el instalador de macOS; en Windows se usa `install-windows.ps1` |
+Todo, igual que en la Mac. `install-windows.ps1` copia los archivos tal cual, salvo que en
+`office.md`, `settings.json` y los hooks de Gemini cambia `/usr/bin/python3 ~/.claude/` por
+`python C:/Users/<usuario>/.claude/`. Esa ruta funciona igual desde Git Bash que desde cmd.
 
-**No copies nada de Clawd ni modifiques `settings.json` en Windows**: los hooks fallarían en
-cada evento de la sesión.
+| Pieza | Destino |
+|---|---|
+| `claude/agents/*.md` | `%USERPROFILE%\.claudegents\` |
+| `claude/commands/*.md` (con `/office`) | `%USERPROFILE%\.claude\commands\` |
+| `claude/clawd/` (statusline, oficina 3D, `sim-oficina.sh`) | `%USERPROFILE%\.claude\clawd\` |
+| `claude/settings.fragment.json` | se combina en `%USERPROFILE%\.claude\settings.json` (con respaldo) |
+| `gemini/hooks.json` | se combina en `%USERPROFILE%\.gemini\config\hooks.json`, si existe `.gemini` |
+
+Si no hay Python 3 en el PATH, el instalador solo copia agentes y comandos (sin `/office`)
+y no toca `settings.json`; si no, los hooks fallarían en cada evento.
 
 ## Pasos (para Claude)
 
-1. **Requisitos.** Comprueba que existan `git --version` y `claude --version`. Si falta
+1. **Requisitos.** Comprueba que existan `git --version`, `claude --version` y
+   `python --version` (3.8 o más nuevo; para Clawd). Si falta
    Claude Code, la instalación oficial en PowerShell es:
    ```powershell
    irm https://claude.ai/install.ps1 | iex
@@ -42,16 +45,17 @@ cada evento de la sesión.
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
    ```
-   Copia los 5 agentes y 5 comandos a `$HOME\.claude\`, sin `office.md`.
+   Copia los agentes, los comandos y Clawd, y combina `settings.json`.
 
 5. **Verificar.** Pídele al usuario que abra una sesión **nueva** de `claude` y:
    - escriba `/agents`: deben aparecer `explorador`, `planificador`, `revisor`,
      `seguridad` y `guia-tdd`;
    - escriba `/`: deben aparecer `/planear`, `/explicar`, `/tdd`, `/revisar-codigo` y
      `/seguridad`;
+   - vea a Clawd en la barra de estado y escriba `/office` para abrir la oficina;
    - pruebe en algún proyecto, por ejemplo `/explicar cómo arranca la app`.
 
-6. **Contarle al usuario** qué se copió, qué se respaldó y qué se dejó fuera (Clawd) y por qué.
+6. **Contarle al usuario** qué se copió, qué se respaldó y qué se dejó fuera y por qué.
 
 ## Cosas de Windows que conviene saber
 

@@ -4,16 +4,20 @@
 # usage: sim-oficina.sh [SESSION] [PAUSE]   (default: demo-oficina 1.2)
 #        sim-oficina.sh --gemini [PAUSE]    simulates Gemini working in Antigravity
 
+# macOS ships /usr/bin/python3; on Windows (Git Bash) it's python.
+PY=/usr/bin/python3
+[ -x "$PY" ] || PY=python
+
 if [ "$1" = --gemini ]; then
   D=${2:-1.2}
   # Like Antigravity: camelCase JSON on stdin, and the hook answers with JSON.
   g() {
     echo "  ✦ Gemini: $1"
-    echo "$2" | /usr/bin/python3 "$HOME/.claude/clawd/clawd.py" gemini-hook $1 >/dev/null
+    echo "$2" | "$PY" "$HOME/.claude/clawd/clawd.py" gemini-hook $1 >/dev/null
     sleep $D
   }
   echo "Simulated Gemini (~15 s). Ctrl+C to stop."
-  P='"conversationId":"'$(uuidgen | tr A-Z a-z)'","workspacePaths":["/x/login_rive_animation"],"modelName":"auto"'
+  P='"conversationId":"'$("$PY" -c 'import uuid; print(uuid.uuid4())')'","workspacePaths":["/x/login_rive_animation"],"modelName":"auto"'
   L='/x/login_rive_animation/lib'
   g session-start "{$P}"
   g pre-invocation "{$P,\"invocationNum\":1}"
@@ -31,7 +35,7 @@ fi
 
 S=${1:-demo-oficina}; D=${2:-1.2}
 R=$RANDOM  # fresh ids on every run, like Claude Code's
-C=(/usr/bin/python3 "$HOME/.claude/clawd/clawd.py")
+C=("$PY" "$HOME/.claude/clawd/clawd.py")
 P='"cwd":"/x/login_rive_animation","session_id":"'$S'"'
 
 h() { echo "$2" | "${C[@]}" hook $1; sleep $D; }
@@ -68,7 +72,7 @@ done_task() { echo "  ✅ $1 completes: $3"; h task-completed "{$P,$(who $1),\"t
 stop() { echo "← $1 leaves: $2"; h subagent-stop "{$P,$(who $1),\"last_assistant_message\":\"$2\"}"; }
 
 echo "Team demo in session '$S' (~1 min with a $D s pause). Ctrl+C to stop."
-echo "Watch it with /office, or: /usr/bin/python3 ~/.claude/clawd/clawd.py office $S"
+echo "Watch it with /office, or: $PY ~/.claude/clawd/clawd.py office $S"
 echo
 h start "{$P,\"source\":\"startup\"}"
 h thinking "{$P,\"hook_event_name\":\"UserPromptSubmit\"}"

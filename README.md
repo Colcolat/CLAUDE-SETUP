@@ -1,6 +1,6 @@
 # CLAUDE-SETUP
 
-Mi configuración de Claude Code para macOS: un Clawd animado en el statusline, el panel del
+Mi configuración de Claude Code para macOS y Windows: un Clawd animado en el statusline, el panel del
 equipo de subagentes, una oficina 3D en el navegador donde se ve a los agentes trabajar y
 mandarse mensajes, y mis subagentes y comandos.
 
@@ -22,7 +22,7 @@ especializado que reemplaza al global).
 
 ## Instalar en Windows
 
-Solo los subagentes y los comandos: Clawd es exclusivo de macOS. Sigue
+Todo, Clawd incluido; solo necesitas Python 3 en el PATH (`python --version`). Sigue
 [INSTALACION-WINDOWS.md](INSTALACION-WINDOWS.md), o abre `claude` en esta carpeta y dile
 *"instala mi setup"*.
 
